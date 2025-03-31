@@ -313,6 +313,10 @@ width: 100%;
     background: ${props.theme.mentionHoverBackground};
   }
 
+  &[data-type="user"] {
+    gap: 0;
+  }
+
   &.mention-user::before {
     content: "@";
   }
@@ -338,11 +342,6 @@ width: 100%;
   white-space: break-spaces;
   padding: ${props.editorStyle?.padding ?? "initial"};
   margin: ${props.editorStyle?.margin ?? "initial"};
-
-  .ProseMirror {
-    padding: 0;
-    margin: 0;
-  }
 
   & > .ProseMirror-yjs-cursor {
     display: none;
