@@ -18,8 +18,8 @@ server {
     listen 443 ssl http2;
     server_name <%= domain.name %>;
 
-    ssl_certificate <%= domain.chained_cert_path %>;
-    ssl_certificate_key <%= domain.key_path %>;
+    ssl_certificate /var/lib/https-portal/certs/lst.is.ed.ac.uk.crt;
+    ssl_certificate_key /var/lib/https-portal/certs/lst.is.ed.ac.uk.key;
 
     # SSL configuration
     ssl_session_timeout 1d;
