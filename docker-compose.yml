@@ -65,6 +65,8 @@ services:
       - https-portal-data:/var/lib/https-portal
       - ./certs:/var/lib/https-portal/certs
       - ./nginx-conf:/var/lib/https-portal/nginx-conf
+    depends_on:
+      - outline
     healthcheck:
       test: ["CMD", "service", "nginx", "status"]
       interval: 30s
