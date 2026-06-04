@@ -18,3 +18,4 @@ docker.env
 certs/
 backup.sql
 backups
+backups/
