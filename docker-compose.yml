@@ -11,12 +11,15 @@ services:
       volumes:
         - storage-data:/var/lib/outline/data
       depends_on:
-        - postgres
-        - redis
+        postgres:
+          condition: service_healthy
+        redis:
+          condition: service_healthy
+      restart: unless-stopped
 
   redis:
     container_name: redis
-    image: redis
+    image: redis:7
     env_file: ./docker.env
     expose:
       - "6379"
@@ -31,7 +34,7 @@ services:
 
   postgres:
     container_name: postgres
-    image: postgres
+    image: postgres:17
     env_file: ./docker.env
     expose:
       - "5432"
@@ -42,6 +45,7 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+      restart: unless-stopped
 #    environment:
 #      POSTGRES_USER: ${POSTGRES_USER}
 #      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}

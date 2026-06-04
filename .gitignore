@@ -14,3 +14,7 @@ data/*
 *.pem
 *.key
 *.cert
+docker.env
+certs/
+backup.sql
+backups
