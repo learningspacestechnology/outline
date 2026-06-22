@@ -16,6 +16,12 @@ services:
         redis:
           condition: service_healthy
       restart: unless-stopped
+      healthcheck:
+        test: ["CMD-SHELL", "wget -qO- http://localhost:3000/_health | grep -q OK || exit 1"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+        start_period: 30s
 
   redis:
     container_name: redis
@@ -64,7 +70,8 @@ services:
       # Certs issued on the host by scripts/letsencrypt (DNS-01 / TSIG).
       - ./certs:/etc/nginx/certs:ro
     depends_on:
-      - outline
+      outline:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost/healthz"]
       interval: 30s
