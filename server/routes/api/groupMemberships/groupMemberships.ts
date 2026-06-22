@@ -1,16 +1,16 @@
 import Router from "koa-router";
-import uniqBy from "lodash/uniqBy";
+import { uniqBy } from "es-toolkit/compat";
 import { Op } from "sequelize";
 import auth from "@server/middlewares/authentication";
 import validate from "@server/middlewares/validate";
 import { Document, GroupMembership } from "@server/models";
 import {
-  presentDocument,
+  presentDocuments,
   presentGroup,
   presentGroupMembership,
   presentPolicies,
 } from "@server/presenters";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
 
@@ -24,8 +24,11 @@ router.post(
   async (ctx: APIContext<T.GroupMembershipsListReq>) => {
     const { groupId } = ctx.input.body;
     const { user } = ctx.state.auth;
+    const userId = user.id;
 
-    const memberships = await GroupMembership.findAll({
+    const { count, rows: memberships } = await GroupMembership.findAndCountAll({
+      distinct: true,
+      col: "id",
       where: {
         documentId: {
           [Op.ne]: null,
@@ -44,7 +47,7 @@ router.post(
               association: "groupUsers",
               required: true,
               where: {
-                userId: user.id,
+                userId,
               },
             },
           ],
@@ -57,11 +60,9 @@ router.post(
     const documentIds = memberships
       .map((p) => p.documentId)
       .filter(Boolean) as string[];
-    const documents = await Document.scope([
-      "withDrafts",
-      { method: ["withMembership", user.id] },
-      { method: ["withCollectionPermissions", user.id] },
-    ]).findAll({
+    const documents = await Document.withMembershipScope(userId, {
+      includeDrafts: true,
+    }).findAll({
       where: {
         id: documentIds,
       },
@@ -78,13 +79,11 @@ router.post(
     ]);
 
     ctx.body = {
-      pagination: ctx.state.pagination,
+      pagination: { ...ctx.state.pagination, total: count },
       data: {
         groups: await Promise.all(groups.map(presentGroup)),
         groupMemberships: memberships.map(presentGroupMembership),
-        documents: await Promise.all(
-          documents.map((document: Document) => presentDocument(ctx, document))
-        ),
+        documents: await presentDocuments(ctx, documents),
       },
       policies,
     };

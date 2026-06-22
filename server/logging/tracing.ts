@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-import { SpanOptions } from "dd-trace";
+import type { SpanOptions } from "dd-trace";
 import DDTags from "dd-trace/ext/tags";
 import env from "@server/env";
 import tracer from "./tracer";
@@ -29,13 +29,14 @@ import * as Tracing from "./tracer";
 type DDTag = (typeof DDTags)[keyof typeof DDTags];
 
 type Tags = {
-  [tag in DDTag]?: any;
+  [tag in DDTag]?: unknown;
 } & {
-  [key: string]: any;
+  [key: string]: unknown;
 };
 
 interface Constructor {
-  new (...args: any[]): any;
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- variance requires `any[]` to accept arbitrary constructors
+  new (...args: any[]): unknown;
 }
 
 interface TraceConfig {
@@ -58,15 +59,16 @@ interface TraceConfig {
 export const traceFunction =
   (config: TraceConfig) =>
   <
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- variance requires `any` to accept arbitrary functions
     F extends (...args: any[]) => any,
     P extends Parameters<F>,
-    R extends ReturnType<F>
+    R extends ReturnType<F>,
   >(
     target: F
   ): F =>
     env.ENVIRONMENT === "test"
       ? target
-      : (function wrapperFn(this: any, ...args: P): R {
+      : (function wrapperFn(this: unknown, ...args: P): R {
           const { className, methodName = target.name, tags } = config;
           const childOf = config.isRoot
             ? undefined
@@ -125,8 +127,8 @@ export const traceFunction =
         } as F);
 
 const traceMethod = (config?: TraceConfig) =>
-  function <R, A extends any[], F extends (...args: A) => R>(
-    target: any,
+  function <R, A extends unknown[], F extends (...args: A) => R>(
+    target: { name?: string; constructor: { name: string } },
     _propertyKey: string,
     descriptor: PropertyDescriptor
   ): TypedPropertyDescriptor<F> {
@@ -156,7 +158,7 @@ const traceClass = (config?: TraceConfig) =>
         key
       );
 
-      // eslint-disable-next-line no-undef
+      // oxlint-disable-next-line no-undef
       if (typeof key === "string" && typeof descriptor?.value === "function") {
         Object.defineProperty(
           constructor.prototype,
@@ -170,7 +172,7 @@ const traceClass = (config?: TraceConfig) =>
     staticKeys.forEach((key) => {
       const descriptor = Object.getOwnPropertyDescriptor(constructor, key);
 
-      // eslint-disable-next-line no-undef
+      // oxlint-disable-next-line no-undef
       if (typeof key === "string" && typeof descriptor?.value === "function") {
         Object.defineProperty(
           constructor,
@@ -187,24 +189,28 @@ const traceClass = (config?: TraceConfig) =>
  * @param config Optional configuration for the span that will be created for this trace.
  */
 // Going to rely on inferrence do its thing for this function
-// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
+// oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export function trace(config?: TraceConfig) {
   function traceDecorator(target: Constructor): void;
   function traceDecorator<T>(
-    target: Record<string, any>,
+    target: Record<string, unknown>,
     propertyKey: string | symbol,
     descriptor: TypedPropertyDescriptor<T>
   ): void;
   function traceDecorator(
-    a: Constructor | Record<string, any>,
-    b?: any,
-    c?: any
+    a: Constructor | Record<string, unknown>,
+    b?: string | symbol,
+    c?: PropertyDescriptor
   ): void {
     if (typeof a === "function") {
       // Need to cast as there is no safe runtime way to check if a function is a constructor
       traceClass(config)(a as Constructor);
     } else {
-      traceMethod(config)(a, b, c);
+      traceMethod(config)(
+        a as { name?: string; constructor: { name: string } },
+        b as string,
+        c!
+      );
     }
   }
 

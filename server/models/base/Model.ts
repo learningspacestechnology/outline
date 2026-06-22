@@ -1,18 +1,16 @@
-/* eslint-disable @typescript-eslint/ban-types */
 import isEqual from "fast-deep-equal";
-import isArray from "lodash/isArray";
-import isObject from "lodash/isObject";
-import pick from "lodash/pick";
-import {
+import { isArray, isObject, pick } from "es-toolkit/compat";
+import type {
   Attributes,
+  CreateOptions,
   CreationAttributes,
-  DataTypes,
   FindOptions,
   FindOrCreateOptions,
   ModelStatic,
   NonAttribute,
   SaveOptions,
 } from "sequelize";
+import { DataTypes, UniqueConstraintError } from "sequelize";
 import {
   AfterCreate,
   AfterDestroy,
@@ -23,28 +21,34 @@ import {
   Model as SequelizeModel,
 } from "sequelize-typescript";
 import Logger from "@server/logging/Logger";
-import { Replace, APIContext } from "@server/types";
-import { getChangsetSkipped } from "../decorators/Changeset";
+import type { Replace, APIContext } from "@server/types";
+import { getChangesetSkipped } from "../decorators/Changeset";
+import { InternalError } from "@server/errors";
 
-type EventOverrideOptions = {
+export type EventOverrideOptions = {
   /** Override the default event name. */
   name?: string;
   /** Additional data to publish in the event. */
   data?: Record<string, unknown>;
+  /**
+   * Whether to persist the event to the database. Defaults to true when using any `withCtx` methods.
+   */
+  persist?: boolean;
 };
 
 type EventOptions = EventOverrideOptions & {
   /**
    * Whether to publish event to the job queue. Defaults to true when using any `withCtx` methods.
    */
-  create: boolean;
+  publish: boolean;
 };
 
 export type HookContext = APIContext["context"] & { event?: EventOptions };
 
 class Model<
-  TModelAttributes extends {} = any,
-  TCreationAttributes extends {} = TModelAttributes
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Sequelize's Attributes<M> resolves to never under object default; load-bearing for static helpers like saveWithCtx<M extends Model>.
+  TModelAttributes extends object = any,
+  TCreationAttributes extends object = TModelAttributes,
 > extends SequelizeModel<TModelAttributes, TCreationAttributes> {
   /**
    * The namespace to use for events - defaults to the table name if none is provided.
@@ -63,7 +67,7 @@ class Model<
       ...ctx.context,
       event: {
         ...eventOpts,
-        create: true,
+        publish: true,
       },
     };
     return this.save({ ...options, ...hookContext });
@@ -81,7 +85,7 @@ class Model<
       ...ctx.context,
       event: {
         ...eventOpts,
-        create: true,
+        publish: true,
       },
     };
     this.set(keys);
@@ -97,7 +101,7 @@ class Model<
       ...ctx.context,
       event: {
         ...eventOpts,
-        create: true,
+        publish: true,
       },
     };
     return this.destroy(hookContext);
@@ -111,33 +115,69 @@ class Model<
       ...ctx.context,
       event: {
         ...eventOpts,
-        create: true,
+        publish: true,
       },
     };
     return this.restore(hookContext);
   }
 
   /**
-   * Find a row that matches the query, or build and save the row if none is found
+   * Find a row that matches the query, or build and save the row if none is found.
    * The successful result of the promise will be (instance, created) - Make sure to use `.then(([...]))`
+   *
+   * @param ctx The API context.
+   * @param options The find or create options.
+   * @param eventOpts Optional event override options.
+   * @returns a tuple of the instance and a boolean indicating if it was created.
    */
-  public static findOrCreateWithCtx<M extends Model>(
+  public static async findOrCreateWithCtx<M extends Model>(
     this: ModelStatic<M>,
     ctx: APIContext,
     options: FindOrCreateOptions<Attributes<M>, CreationAttributes<M>>,
     eventOpts?: EventOverrideOptions
-  ) {
+  ): Promise<[M, boolean]> {
     const hookContext: HookContext = {
       ...ctx.context,
       event: {
         ...eventOpts,
-        create: true,
+        publish: true,
       },
     };
-    return this.findOrCreate({
-      ...options,
-      ...hookContext,
+    const transaction = ctx.context.transaction;
+
+    // First, try to find an existing record
+    const existing = await this.findOne({
+      where: options.where,
+      transaction,
     });
+
+    if (existing) {
+      return [existing as M, false];
+    }
+
+    // Record not found, try to create it
+    try {
+      const created = await this.create(
+        Object.assign(
+          {},
+          options.defaults,
+          options.where
+        ) as CreationAttributes<M>,
+        { ...hookContext, transaction }
+      );
+      return [created as M, true];
+    } catch (err) {
+      // Handle race condition: another request created the record first
+      if (err instanceof UniqueConstraintError) {
+        const found = await this.findOne({
+          where: options.where,
+          transaction,
+          rejectOnEmpty: true,
+        });
+        return [found as M, false];
+      }
+      throw err;
+    }
   }
 
   /**
@@ -147,13 +187,15 @@ class Model<
     this: ModelStatic<M>,
     ctx: APIContext,
     values?: CreationAttributes<M>,
-    eventOpts?: EventOverrideOptions
+    eventOpts?: EventOverrideOptions,
+    createOpts?: CreateOptions<M>
   ) {
-    const hookContext: HookContext = {
+    const hookContext = {
       ...ctx.context,
+      ...createOpts,
       event: {
         ...eventOpts,
-        create: true,
+        publish: true,
       },
     };
     return this.create(values, hookContext);
@@ -219,7 +261,7 @@ class Model<
     const namespace = this.eventNamespace ?? this.tableName;
     const models = this.sequelize!.models;
 
-    if (!context.event?.create) {
+    if (!context.event?.publish) {
       return;
     }
 
@@ -235,44 +277,63 @@ class Model<
       });
     }
 
-    return models.event.create(
-      {
-        name: `${namespace}.${context.event.name ?? name}`,
-        modelId: "modelId" in model ? model.modelId : model.id,
-        collectionId:
-          "collectionId" in model
-            ? model.collectionId
-            : model instanceof models.collection
+    if (context.event.name?.includes(".")) {
+      throw InternalError(
+        `Event name (${context.event.name}) should not include a period, the namespace is automatically prefixed`
+      );
+    }
+
+    const attrs = {
+      name: `${namespace}.${context.event.name ?? name}`,
+      modelId: "modelId" in model ? model.modelId : model.id,
+      collectionId:
+        "collectionId" in model
+          ? model.collectionId
+          : model instanceof models.collection
             ? model.id
             : undefined,
-        documentId:
-          "documentId" in model
-            ? model.documentId
-            : model instanceof models.document
+      documentId:
+        "documentId" in model
+          ? model.documentId
+          : model instanceof models.document
             ? model.id
             : undefined,
-        userId:
-          "userId" in model
-            ? model.userId
-            : model instanceof models.user
+      userId:
+        "userId" in model
+          ? model.userId
+          : model instanceof models.user
             ? model.id
             : undefined,
-        teamId:
-          "teamId" in model
-            ? model.teamId
-            : model instanceof models.team
+      teamId:
+        "teamId" in model
+          ? model.teamId
+          : model instanceof models.team
             ? model.id
             : context.auth?.user.teamId,
-        actorId: context.auth?.user?.id,
-        authType: context.auth?.type,
-        ip: context.ip,
-        changes: model.previousChangeset,
-        data: context.event.data,
-      },
-      {
+      actorId:
+        context.auth?.user?.id ??
+        (model instanceof models.user && name === "create"
+          ? model.id
+          : undefined),
+      authType: context.auth?.type,
+      ip: context.ip,
+      changes: model.previousChangeset,
+      data: context.event.data,
+    };
+
+    if (context.event?.persist !== false) {
+      return models.event.create(attrs, {
         transaction: context.transaction,
-      }
-    );
+      });
+    } else if (context.transaction) {
+      (context.transaction.parent || context.transaction).afterCommit(() =>
+        // @ts-expect-error Event class
+        models.event.schedule(attrs)
+      );
+    } else {
+      // @ts-expect-error Event class
+      return models.event.schedule(attrs);
+    }
   }
 
   /**
@@ -334,7 +395,7 @@ class Model<
 
     const virtualFields = (this.constructor as typeof Model).virtualFields;
     const blobFields = (this.constructor as typeof Model).blobFields;
-    const skippedFields = getChangsetSkipped(this);
+    const skippedFields = getChangesetSkipped(this);
 
     for (const change of changes) {
       const previous = this.previous(change);

@@ -1,13 +1,18 @@
 import Router from "koa-router";
 import { Op } from "sequelize";
 import { Sequelize } from "sequelize-typescript";
+import { StatusFilter } from "@shared/types";
 import auth from "@server/middlewares/authentication";
 import validate from "@server/middlewares/validate";
-import { User } from "@server/models";
-import SearchHelper from "@server/models/helpers/SearchHelper";
+import { Group, User } from "@server/models";
+import SearchProviderManager from "@server/utils/SearchProviderManager";
 import { can } from "@server/policies";
-import { presentDocument, presentUser } from "@server/presenters";
-import { APIContext } from "@server/types";
+import {
+  presentDocuments,
+  presentGroup,
+  presentUser,
+} from "@server/presenters";
+import type { APIContext } from "@server/types";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
 
@@ -23,11 +28,12 @@ router.post(
     const { offset, limit } = ctx.state.pagination;
     const actor = ctx.state.auth.user;
 
-    const [documents, users, collections] = await Promise.all([
-      SearchHelper.searchTitlesForUser(actor, {
+    const [documents, users, groups, collections] = await Promise.all([
+      SearchProviderManager.getProvider().searchTitlesForUser(actor, {
         query,
         offset,
         limit,
+        statusFilter: [StatusFilter.Published],
       }),
       User.findAll({
         where: {
@@ -53,21 +59,39 @@ router.post(
         offset,
         limit,
       }),
-      SearchHelper.searchCollectionsForUser(actor, { query, offset, limit }),
+      Group.findAll({
+        where: {
+          teamId: actor.teamId,
+          disableMentions: false,
+          [Op.and]: query
+            ? Sequelize.literal(
+                `unaccent(LOWER(name)) like unaccent(LOWER(:query))`
+              )
+            : {},
+        },
+        order: [["name", "ASC"]],
+        replacements: { query: `%${query}%` },
+        offset,
+        limit,
+      }),
+      SearchProviderManager.getProvider().searchCollectionsForUser(actor, {
+        query,
+        offset,
+        limit,
+      }),
     ]);
 
     ctx.body = {
       pagination: ctx.state.pagination,
       data: {
-        documents: await Promise.all(
-          documents.map((document) => presentDocument(ctx, document))
-        ),
+        documents: await presentDocuments(ctx, documents),
         users: users.map((user) =>
           presentUser(user, {
             includeEmail: !!can(actor, "readEmail", user),
             includeDetails: !!can(actor, "readDetails", user),
           })
         ),
+        groups: await Promise.all(groups.map((group) => presentGroup(group))),
         collections,
       },
     };

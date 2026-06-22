@@ -1,4 +1,4 @@
-import React from "react";
+import { useState } from "react";
 import styled from "styled-components";
 import { fadeIn } from "~/styles/animations";
 
@@ -18,10 +18,10 @@ type Props = {
 };
 
 /**
- * Wraps children in a <Fade> if loading is true on mount.
+ * Wraps children in a <Fade> if animate is true on mount.
  */
 export const ConditionalFade = ({ animate, children }: Props) => {
-  const [isAnimated] = React.useState(animate);
+  const [isAnimated] = useState(animate);
   return isAnimated ? <Fade>{children}</Fade> : <>{children}</>;
 };
 

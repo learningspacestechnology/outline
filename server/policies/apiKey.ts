@@ -7,13 +7,13 @@ import {
   isOwner,
   isTeamModel,
   isTeamMutable,
+  or,
 } from "./utils";
 
 allow(User, "createApiKey", Team, (actor, team) =>
   and(
     isTeamModel(actor, team),
     isTeamMutable(actor),
-    !actor.isViewer,
     !actor.isGuest,
     !actor.isSuspended,
     actor.isAdmin ||
@@ -32,8 +32,13 @@ allow(User, "listApiKeys", Team, (actor, team) =>
 
 allow(User, ["read", "update", "delete"], ApiKey, (actor, apiKey) =>
   and(
-    isOwner(actor, apiKey),
-    actor.isAdmin ||
-      !!actor.team?.getPreference(TeamPreference.MembersCanCreateApiKey)
+    isTeamModel(actor, apiKey?.user),
+    or(
+      actor.isAdmin,
+      and(
+        isOwner(actor, apiKey),
+        !!actor.team?.getPreference(TeamPreference.MembersCanCreateApiKey)
+      )
+    )
   )
 );

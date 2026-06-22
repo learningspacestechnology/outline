@@ -6,7 +6,7 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { CollectionPermission } from "@shared/types";
-import Collection from "~/models/Collection";
+import type Collection from "~/models/Collection";
 import Group from "~/models/Group";
 import User from "~/models/User";
 import { Avatar, AvatarSize } from "~/components/Avatar";
@@ -18,8 +18,9 @@ import useCurrentTeam from "~/hooks/useCurrentTeam";
 import useKeyDown from "~/hooks/useKeyDown";
 import usePolicy from "~/hooks/usePolicy";
 import usePrevious from "~/hooks/usePrevious";
+import useShareDataLoader from "~/hooks/useShareDataLoader";
 import useStores from "~/hooks/useStores";
-import { Permission } from "~/types";
+import type { Permission } from "~/types";
 import { collectionPath, urlify } from "~/utils/routeHelpers";
 import { Wrapper, presence } from "../components";
 import { CopyLinkButton } from "../components/CopyLinkButton";
@@ -35,11 +36,22 @@ type Props = {
   onRequestClose: () => void;
   /** Whether the popover is visible. */
   visible: boolean;
+  /** Whether the share data is currently loading, managed externally. */
+  loading?: boolean;
 };
 
-function SharePopover({ collection, visible, onRequestClose }: Props) {
+function SharePopover({
+  collection,
+  visible,
+  onRequestClose,
+  loading: externalLoading,
+}: Props) {
   const team = useCurrentTeam();
-  const { groupMemberships, users, groups, memberships } = useStores();
+  const { groupMemberships, users, groups, memberships, shares } = useStores();
+  const { preload, loading: internalLoading } = useShareDataLoader({
+    collection,
+  });
+  const loading = externalLoading ?? internalLoading;
   const { t } = useTranslation();
   const can = usePolicy(collection);
   const [query, setQuery] = React.useState("");
@@ -51,8 +63,10 @@ function SharePopover({ collection, visible, onRequestClose }: Props) {
     CollectionPermission.Read
   );
 
+  const share = shares.getByCollectionId(collection.id);
   const prevPendingIds = usePrevious(pendingIds);
 
+  const wrapperRef = React.useRef<HTMLDivElement | null>(null);
   const suggestionsRef = React.useRef<HTMLDivElement | null>(null);
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
 
@@ -76,6 +90,15 @@ function SharePopover({ collection, visible, onRequestClose }: Props) {
     }
   );
 
+  // Move focus into the popover to account for lazy-loading
+  React.useLayoutEffect(() => {
+    if (!hasRendered) {
+      return;
+    }
+
+    (searchInputRef.current ?? wrapperRef.current)?.focus();
+  }, [hasRendered]);
+
   // Hide the picker when the popover is closed
   React.useEffect(() => {
     if (visible) {
@@ -93,9 +116,12 @@ function SharePopover({ collection, visible, onRequestClose }: Props) {
 
   React.useEffect(() => {
     if (visible) {
+      if (externalLoading === undefined) {
+        preload();
+      }
       setHasRendered(true);
     }
-  }, [visible]);
+  }, [visible, externalLoading, preload]);
 
   React.useEffect(() => {
     if (prevPendingIds && pendingIds.length > prevPendingIds.length) {
@@ -329,13 +355,13 @@ function SharePopover({ collection, visible, onRequestClose }: Props) {
   ) : (
     <CopyLinkButton
       key="copy-link"
-      url={urlify(collectionPath(collection.path))}
+      url={urlify(collectionPath(collection))}
       onCopy={onRequestClose}
     />
   );
 
   return (
-    <Wrapper>
+    <Wrapper ref={wrapperRef} tabIndex={-1}>
       {can.update && (
         <SearchInput
           ref={searchInputRef}
@@ -363,7 +389,10 @@ function SharePopover({ collection, visible, onRequestClose }: Props) {
       <div style={{ display: picker ? "none" : "block" }}>
         <AccessControlList
           collection={collection}
+          share={share}
           invitedInSession={invitedInSession}
+          visible={visible}
+          loading={loading}
         />
       </div>
     </Wrapper>

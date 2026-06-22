@@ -9,23 +9,6 @@ import {
 import { serialize } from "./index";
 
 describe("admin", () => {
-  it("should allow team admin to archive collection", async () => {
-    const team = await buildTeam();
-    const admin = await buildAdmin({ teamId: team.id });
-    const collection = await buildCollection({ teamId: team.id });
-    // reload to get membership
-    const reloaded = await Collection.scope({
-      method: ["withMembership", admin.id],
-    }).findByPk(collection.id);
-    const abilities = serialize(admin, reloaded);
-    expect(abilities.read).toBeTruthy();
-    expect(abilities.update).toBeTruthy();
-    expect(abilities.readDocument).toBeTruthy();
-    expect(abilities.updateDocument).toBeTruthy();
-    expect(abilities.createDocument).toBeTruthy();
-    expect(abilities.archive).toBeTruthy();
-  });
-
   it("should allow updating collection but not reading documents", async () => {
     const team = await buildTeam();
     const user = await buildAdmin({
@@ -36,9 +19,9 @@ describe("admin", () => {
       permission: null,
     });
     // reload to get membership
-    const reloaded = await Collection.scope({
-      method: ["withMembership", user.id],
-    }).findByPk(collection.id);
+    const reloaded = await Collection.findByPk(collection.id, {
+      userId: user.id,
+    });
     const abilities = serialize(user, reloaded);
     expect(abilities.readDocument).toEqual(false);
     expect(abilities.updateDocument).toEqual(false);
@@ -49,7 +32,7 @@ describe("admin", () => {
     expect(abilities.archive).toBeTruthy();
   });
 
-  it("should allow updating documents in view only collection", async () => {
+  it("should have correct permissions in view only collection", async () => {
     const team = await buildTeam();
     const user = await buildAdmin({
       teamId: team.id,
@@ -59,17 +42,19 @@ describe("admin", () => {
       permission: CollectionPermission.Read,
     });
     // reload to get membership
-    const reloaded = await Collection.scope({
-      method: ["withMembership", user.id],
-    }).findByPk(collection.id);
+    const reloaded = await Collection.findByPk(collection.id, {
+      userId: user.id,
+    });
     const abilities = serialize(user, reloaded);
     expect(abilities.readDocument).toBeTruthy();
-    expect(abilities.updateDocument).toBeTruthy();
-    expect(abilities.createDocument).toBeTruthy();
     expect(abilities.share).toBeTruthy();
     expect(abilities.read).toBeTruthy();
     expect(abilities.update).toBeTruthy();
     expect(abilities.archive).toBeTruthy();
+
+    // admins should not be able to update documents when all users have view only access
+    expect(abilities.updateDocument).toBeFalsy();
+    expect(abilities.createDocument).toBeFalsy();
   });
 });
 
@@ -87,9 +72,9 @@ describe("member", () => {
         },
       });
       // reload to get membership
-      const reloaded = await Collection.scope({
-        method: ["withMembership", member.id],
-      }).findByPk(collection.id);
+      const reloaded = await Collection.findByPk(collection.id, {
+        userId: member.id,
+      });
       const abilities = serialize(member, reloaded);
       expect(abilities.read).toBeTruthy();
       expect(abilities.update).toBeTruthy();
@@ -116,9 +101,9 @@ describe("member", () => {
         },
       });
       // reload to get membership
-      const reloaded = await Collection.scope({
-        method: ["withMembership", member.id],
-      }).findByPk(collection.id);
+      const reloaded = await Collection.findByPk(collection.id, {
+        userId: member.id,
+      });
       const abilities = serialize(member, reloaded);
       expect(abilities.read).toBeTruthy();
       expect(abilities.update).toBe(false);
@@ -161,9 +146,9 @@ describe("member", () => {
         permission: CollectionPermission.Read,
       });
       // reload to get membership
-      const reloaded = await Collection.scope({
-        method: ["withMembership", user.id],
-      }).findByPk(collection.id);
+      const reloaded = await Collection.findByPk(collection.id, {
+        userId: user.id,
+      });
       const abilities = serialize(user, reloaded);
       expect(abilities.read).toBeTruthy();
       expect(abilities.readDocument).toBeTruthy();
@@ -189,9 +174,9 @@ describe("member", () => {
         },
       });
       // reload to get membership
-      const reloaded = await Collection.scope({
-        method: ["withMembership", member.id],
-      }).findByPk(collection.id);
+      const reloaded = await Collection.findByPk(collection.id, {
+        userId: member.id,
+      });
       const abilities = serialize(member, reloaded);
       expect(abilities.read).toBeTruthy();
       expect(abilities.update).not.toBeTruthy();
@@ -232,9 +217,9 @@ describe("member", () => {
         },
       });
       // reload to get membership
-      const reloaded = await Collection.scope({
-        method: ["withMembership", member.id],
-      }).findByPk(collection.id);
+      const reloaded = await Collection.findByPk(collection.id, {
+        userId: member.id,
+      });
       const abilities = serialize(member, reloaded);
       expect(abilities.read).toBeTruthy();
       expect(abilities.readDocument).toBeTruthy();
@@ -279,9 +264,9 @@ describe("member", () => {
         permission: CollectionPermission.ReadWrite,
       });
       // reload to get membership
-      const reloaded = await Collection.scope({
-        method: ["withMembership", user.id],
-      }).findByPk(collection.id);
+      const reloaded = await Collection.findByPk(collection.id, {
+        userId: user.id,
+      });
       const abilities = serialize(user, reloaded);
       expect(abilities.read).toBeTruthy();
       expect(abilities.readDocument).toBeTruthy();
@@ -331,9 +316,9 @@ describe("viewer", () => {
         permission: CollectionPermission.ReadWrite,
       });
       // reload to get membership
-      const reloaded = await Collection.scope({
-        method: ["withMembership", user.id],
-      }).findByPk(collection.id);
+      const reloaded = await Collection.findByPk(collection.id, {
+        userId: user.id,
+      });
       const abilities = serialize(user, reloaded);
       expect(abilities.read).toBeTruthy();
       expect(abilities.readDocument).toBeTruthy();
@@ -361,9 +346,9 @@ describe("viewer", () => {
         permission: CollectionPermission.ReadWrite,
       });
       // reload to get membership
-      const reloaded = await Collection.scope({
-        method: ["withMembership", user.id],
-      }).findByPk(collection.id);
+      const reloaded = await Collection.findByPk(collection.id, {
+        userId: user.id,
+      });
       const abilities = serialize(user, reloaded);
       expect(abilities.read).toBeTruthy();
       expect(abilities.readDocument).toBeTruthy();
@@ -409,9 +394,9 @@ describe("viewer", () => {
         permission: CollectionPermission.ReadWrite,
       });
       // reload to get membership
-      const reloaded = await Collection.scope({
-        method: ["withMembership", user.id],
-      }).findByPk(collection.id);
+      const reloaded = await Collection.findByPk(collection.id, {
+        userId: user.id,
+      });
       const abilities = serialize(user, reloaded);
       expect(abilities.read).toBeTruthy();
       expect(abilities.readDocument).toBeTruthy();
@@ -462,9 +447,9 @@ describe("guest", () => {
       permission: CollectionPermission.Read,
     });
     // reload to get membership
-    const reloaded = await Collection.scope({
-      method: ["withMembership", user.id],
-    }).findByPk(collection.id);
+    const reloaded = await Collection.findByPk(collection.id, {
+      userId: user.id,
+    });
     const abilities = serialize(user, reloaded);
     expect(abilities.read).toBeTruthy();
     expect(abilities.readDocument).toBeTruthy();
@@ -472,5 +457,153 @@ describe("guest", () => {
     expect(abilities.share).toEqual(false);
     expect(abilities.update).toEqual(false);
     expect(abilities.archive).toEqual(false);
+  });
+});
+
+describe("manage templates", () => {
+  describe("templateManagement is members (read_write)", () => {
+    it("should allow member with read_write membership", async () => {
+      const team = await buildTeam();
+      const admin = await buildAdmin({ teamId: team.id });
+      const member = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        permission: null,
+        templateManagement: CollectionPermission.ReadWrite,
+      });
+      await collection.$add("user", member, {
+        through: {
+          permission: CollectionPermission.ReadWrite,
+          createdById: admin.id,
+        },
+      });
+      // reload to get membership
+      const reloaded = await Collection.findByPk(collection.id, {
+        userId: member.id,
+      });
+      const abilities = serialize(member, reloaded);
+      expect(abilities.createTemplate).toBeTruthy();
+      expect(abilities.manageTemplate).toBeTruthy();
+    });
+
+    it("should allow viewer with read_write membership", async () => {
+      const team = await buildTeam();
+      const admin = await buildAdmin({ teamId: team.id });
+      const user = await buildUser({
+        role: UserRole.Viewer,
+        teamId: team.id,
+      });
+      const collection = await buildCollection({
+        teamId: team.id,
+        permission: null,
+        templateManagement: CollectionPermission.ReadWrite,
+      });
+      await collection.$add("user", user, {
+        through: {
+          permission: CollectionPermission.ReadWrite,
+          createdById: admin.id,
+        },
+      });
+      // reload to get membership
+      const reloaded = await Collection.findByPk(collection.id, {
+        userId: user.id,
+      });
+      const abilities = serialize(user, reloaded);
+      expect(abilities.createTemplate).toBeTruthy();
+      expect(abilities.manageTemplate).toBeTruthy();
+    });
+
+    it("should disallow viewer without membership in an open collection", async () => {
+      const team = await buildTeam();
+      const user = await buildUser({
+        role: UserRole.Viewer,
+        teamId: team.id,
+      });
+      const collection = await buildCollection({
+        teamId: team.id,
+        permission: CollectionPermission.ReadWrite,
+        templateManagement: CollectionPermission.ReadWrite,
+      });
+      const abilities = serialize(user, collection);
+      expect(abilities.createTemplate).toEqual(false);
+      expect(abilities.manageTemplate).toEqual(false);
+    });
+
+    it("should disallow guest with read_write membership", async () => {
+      const team = await buildTeam();
+      const admin = await buildAdmin({ teamId: team.id });
+      const user = await buildUser({
+        role: UserRole.Guest,
+        teamId: team.id,
+      });
+      const collection = await buildCollection({
+        teamId: team.id,
+        permission: null,
+        templateManagement: CollectionPermission.ReadWrite,
+      });
+      await collection.$add("user", user, {
+        through: {
+          permission: CollectionPermission.ReadWrite,
+          createdById: admin.id,
+        },
+      });
+      // reload to get membership
+      const reloaded = await Collection.findByPk(collection.id, {
+        userId: user.id,
+      });
+      const abilities = serialize(user, reloaded);
+      expect(abilities.createTemplate).toEqual(false);
+      expect(abilities.manageTemplate).toEqual(false);
+    });
+  });
+
+  describe("templateManagement is managers (admin)", () => {
+    it("should disallow member with read_write membership", async () => {
+      const team = await buildTeam();
+      const admin = await buildAdmin({ teamId: team.id });
+      const member = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        permission: null,
+        templateManagement: CollectionPermission.Admin,
+      });
+      await collection.$add("user", member, {
+        through: {
+          permission: CollectionPermission.ReadWrite,
+          createdById: admin.id,
+        },
+      });
+      // reload to get membership
+      const reloaded = await Collection.findByPk(collection.id, {
+        userId: member.id,
+      });
+      const abilities = serialize(member, reloaded);
+      expect(abilities.createTemplate).toEqual(false);
+      expect(abilities.manageTemplate).toEqual(false);
+    });
+
+    it("should allow member with admin membership", async () => {
+      const team = await buildTeam();
+      const admin = await buildAdmin({ teamId: team.id });
+      const member = await buildUser({ teamId: team.id });
+      const collection = await buildCollection({
+        teamId: team.id,
+        permission: null,
+        templateManagement: CollectionPermission.Admin,
+      });
+      await collection.$add("user", member, {
+        through: {
+          permission: CollectionPermission.Admin,
+          createdById: admin.id,
+        },
+      });
+      // reload to get membership
+      const reloaded = await Collection.findByPk(collection.id, {
+        userId: member.id,
+      });
+      const abilities = serialize(member, reloaded);
+      expect(abilities.createTemplate).toBeTruthy();
+      expect(abilities.manageTemplate).toBeTruthy();
+    });
   });
 });

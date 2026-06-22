@@ -2,7 +2,7 @@ import { observer } from "mobx-react";
 import { DownloadIcon } from "outline-icons";
 import * as React from "react";
 import { useTranslation, Trans } from "react-i18next";
-import FileOperation from "~/models/FileOperation";
+import type FileOperation from "~/models/FileOperation";
 import Button from "~/components/Button";
 import Heading from "~/components/Heading";
 import PaginatedList from "~/components/PaginatedList";
@@ -48,7 +48,7 @@ function Export() {
         {t("Export data")}…
       </Button>
       <br />
-      <PaginatedList
+      <PaginatedList<FileOperation>
         items={fileOperations.exports}
         fetch={fileOperations.fetchPage}
         options={{
@@ -59,7 +59,7 @@ function Export() {
             <Trans>Recent exports</Trans>
           </h2>
         }
-        renderItem={(item: FileOperation) => (
+        renderItem={(item) => (
           <FileOperationListItem key={item.id} fileOperation={item} />
         )}
       />

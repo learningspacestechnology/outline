@@ -3,6 +3,7 @@ import { ProfileIcon } from "outline-icons";
 import * as React from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { errToString } from "@shared/utils/error";
 import Button from "~/components/Button";
 import Heading from "~/components/Heading";
 import Input from "~/components/Input";
@@ -12,6 +13,7 @@ import { UserChangeEmailDialog } from "~/components/UserDialogs";
 import env from "~/env";
 import useCurrentUser from "~/hooks/useCurrentUser";
 import useStores from "~/hooks/useStores";
+import { UserValidation } from "@shared/validations";
 import ImageInput from "./components/ImageInput";
 import SettingRow from "./components/SettingRow";
 
@@ -29,7 +31,7 @@ const Profile = () => {
       await user.save({ name });
       toast.success(t("Profile saved"));
     } catch (err) {
-      toast.error(err.message);
+      toast.error(errToString(err));
     }
   };
 
@@ -72,6 +74,7 @@ const Profile = () => {
           description={t("Choose a photo or image to represent yourself.")}
         >
           <ImageInput
+            alt={t("Profile picture")}
             onSuccess={handleAvatarChange}
             onError={handleAvatarError}
             model={user}
@@ -90,6 +93,8 @@ const Profile = () => {
             autoComplete="name"
             value={name}
             onChange={handleNameChange}
+            maxLength={UserValidation.maxNameLength}
+            showCharacterCount
             required
           />
         </SettingRow>

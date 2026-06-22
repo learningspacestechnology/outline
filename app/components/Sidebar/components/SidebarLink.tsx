@@ -1,40 +1,75 @@
-import { LocationDescriptor } from "history";
+import type { LocationDescriptor } from "history";
 import * as React from "react";
 import styled, { useTheme, css } from "styled-components";
 import breakpoint from "styled-components-breakpoint";
 import EventBoundary from "@shared/components/EventBoundary";
-import { s } from "@shared/styles";
+import { ellipsis, hover, s } from "@shared/styles";
+import { isMobile } from "@shared/utils/browser";
 import NudeButton from "~/components/NudeButton";
 import { UnreadBadge } from "~/components/UnreadBadge";
-import useUnmount from "~/hooks/useUnmount";
+import useClickIntent from "~/hooks/useClickIntent";
 import { undraggableOnDesktop } from "~/styles";
 import Disclosure from "./Disclosure";
-import NavLink, { Props as NavLinkProps } from "./NavLink";
+import type { Props as NavLinkProps } from "./NavLink";
+import NavLink from "./NavLink";
+import type { ActionWithChildren } from "~/types";
+import { ContextMenu } from "~/components/Menu/ContextMenu";
+import { useTranslation } from "react-i18next";
 
+/**
+ * Props for the SidebarLink component.
+ * Extends NavLink props with additional sidebar-specific functionality.
+ */
 type Props = Omit<NavLinkProps, "to"> & {
+  /** The location to navigate to when the link is clicked */
   to?: LocationDescriptor;
+  /** Ref callback to access the underlying HTML element */
   innerRef?: (ref: HTMLElement | null | undefined) => void;
+  /** Callback fired when the link is clicked */
   onClick?: React.MouseEventHandler<HTMLAnchorElement>;
   /** Callback when we expect the user to click on the link. Used for prefetching data. */
-  onClickIntent?: () => void;
-  onDisclosureClick?: React.MouseEventHandler<HTMLButtonElement>;
+  onClickIntent?: React.MouseEventHandler<HTMLElement>;
+  /** Callback fired when the disclosure icon is clicked */
+  onDisclosureClick?: React.MouseEventHandler<HTMLElement>;
+  /** Icon to display on the left side of the link */
   icon?: React.ReactNode;
+  /** Text label or content to display for the link */
   label?: React.ReactNode;
+  /** Optional menu to display on hover or interaction */
   menu?: React.ReactNode;
+  /** Whether to show an unread badge indicator */
   unreadBadge?: boolean;
-  showActions?: boolean;
+  /** Whether to show action buttons on hover */
+  $showActions?: boolean;
+  /** Whether the link is disabled and non-interactive */
   disabled?: boolean;
+  /** Whether the link is currently active */
   active?: boolean;
   /** If set, a disclosure will be rendered to the left of any icon */
   expanded?: boolean;
+  /** Whether this link is the current active drop target for drag and drop */
   isActiveDrop?: boolean;
+  /** Whether this link represents a draft document */
   isDraft?: boolean;
+  /** Nesting depth level for indentation (0-based) */
   depth?: number;
+  /** Whether to truncate the label text (default: true, causes overflow: hidden) */
+  ellipsis?: boolean;
+  /** Whether to automatically scroll this link into view if needed */
   scrollIntoViewIfNeeded?: boolean;
+  /** Optional context menu action to display */
+  contextAction?: ActionWithChildren;
 };
 
 const activeDropStyle = {
   fontWeight: 600,
+};
+
+// Prevents the parent NavLink's mousedown handler from firing (which would
+// navigate or toggle), without calling preventDefault — that would block the
+// native HTML5 drag from initiating on the draggable row.
+const stopPropagation = (ev: React.MouseEvent) => {
+  ev.stopPropagation();
 };
 
 function SidebarLink(
@@ -48,7 +83,7 @@ function SidebarLink(
     isActiveDrop,
     isDraft,
     menu,
-    showActions,
+    $showActions,
     exact,
     href,
     depth,
@@ -57,17 +92,29 @@ function SidebarLink(
     onDisclosureClick,
     disabled,
     unreadBadge,
+    contextAction,
+    ellipsis = true,
     ...rest
   }: Props,
   ref: React.RefObject<HTMLAnchorElement>
 ) {
-  const timer = React.useRef<number>();
+  const hasDisclosure = expanded !== undefined;
+  const { t } = useTranslation();
   const theme = useTheme();
+  const { handleMouseEnter, handleMouseLeave } = useClickIntent(onClickIntent);
   const style = React.useMemo(
     () => ({
-      paddingLeft: `${(depth || 0) * 16 + 12}px`,
+      paddingInlineStart: `${(depth || 0) * 16 + (icon ? -8 : 12)}px`,
+      paddingInlineEnd: unreadBadge ? "32px" : undefined,
     }),
-    [depth]
+    [depth, icon, unreadBadge]
+  );
+
+  const unreadStyle = React.useMemo(
+    () => ({
+      insetInlineEnd: -20,
+    }),
+    []
   );
 
   const activeStyle = React.useMemo(
@@ -79,98 +126,125 @@ function SidebarLink(
     [theme.text, theme.sidebarActiveBackground, style]
   );
 
-  const handleMouseEnter = React.useCallback(() => {
-    if (timer.current) {
-      clearTimeout(timer.current);
-    }
+  const handleClick = React.useCallback(
+    (ev: React.MouseEvent<HTMLAnchorElement>) => {
+      if (onClick && !disabled && ev.isDefaultPrevented() === false) {
+        onClick(ev);
+      }
+    },
+    [onClick, disabled]
+  );
 
-    if (onClickIntent) {
-      timer.current = window.setTimeout(onClickIntent, 100);
-    }
-  }, [onClickIntent]);
+  const handleDisclosureClick = React.useCallback(
+    (ev: React.MouseEvent<HTMLElement>) => {
+      if (!hasDisclosure) {
+        return;
+      }
+      ev.preventDefault();
+      ev.stopPropagation();
+      onDisclosureClick?.(ev);
+    },
+    [onDisclosureClick, hasDisclosure]
+  );
 
-  const handleMouseLeave = React.useCallback(() => {
-    if (timer.current) {
-      clearTimeout(timer.current);
-    }
-  }, []);
+  const DisclosureComponent = icon ? HiddenDisclosure : Disclosure;
 
-  useUnmount(() => {
-    if (timer.current) {
-      clearTimeout(timer.current);
-    }
-  });
-
-  return (
+  const innerContent = (
     <>
+      <ContextMenu action={contextAction} ariaLabel={t("Link options")}>
+        <Content>
+          {hasDisclosure && (
+            <DisclosureComponent
+              expanded={expanded}
+              onClick={handleDisclosureClick}
+              onMouseDown={stopPropagation}
+              tabIndex={-1}
+            />
+          )}
+          {icon && <IconWrapper aria-hidden>{icon}</IconWrapper>}
+          <Label $ellipsis={ellipsis}>{label}</Label>
+          {unreadBadge && <UnreadBadge style={unreadStyle} />}
+        </Content>
+      </ContextMenu>
+      {menu && <Actions $showActions={$showActions}>{menu}</Actions>}
+    </>
+  );
+
+  if (!to) {
+    return (
       <Link
+        as={href ? "a" : "button"}
         $isActiveDrop={isActiveDrop}
         $isDraft={isDraft}
         $disabled={disabled}
-        activeStyle={isActiveDrop ? activeDropStyle : activeStyle}
         style={active ? activeStyle : style}
-        onClick={onClick}
+        onClick={handleClick}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
-        // @ts-expect-error exact does not exist on div
-        exact={exact !== false}
-        to={to}
-        as={to ? undefined : href ? "a" : "div"}
+        onDragEnter={handleMouseEnter}
         href={href}
         className={className}
         ref={ref}
         {...rest}
       >
-        <Content>
-          {expanded !== undefined && (
-            <Disclosure
-              expanded={expanded}
-              onClick={onDisclosureClick}
-              root={depth === 0}
-              tabIndex={-1}
-            />
-          )}
-          {icon && <IconWrapper>{icon}</IconWrapper>}
-          <Label>{label}</Label>
-          {unreadBadge && <UnreadBadge />}
-        </Content>
+        {innerContent}
       </Link>
-      {menu && <Actions showActions={showActions}>{menu}</Actions>}
-    </>
+    );
+  }
+
+  return (
+    <Link
+      $isActiveDrop={isActiveDrop}
+      $isDraft={isDraft}
+      $disabled={disabled}
+      style={active ? activeStyle : style}
+      activeStyle={isActiveDrop ? activeDropStyle : activeStyle}
+      onClick={handleClick}
+      onActiveClick={handleDisclosureClick}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onDragEnter={handleMouseEnter}
+      exact={exact !== false}
+      to={to!}
+      href={href}
+      className={className}
+      // @ts-expect-error spread props cause overload mismatch with styled NavLink
+      ref={ref}
+      {...rest}
+    >
+      {innerContent}
+    </Link>
   );
 }
+
+// accounts for whitespace around icon
+export const IconWrapper = styled.span`
+  margin-inline-start: -4px;
+  height: 24px;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: opacity 200ms ease-in-out;
+`;
 
 const Content = styled.span`
   display: flex;
   align-items: start;
   position: relative;
   width: 100%;
-
-  ${Disclosure} {
-    margin-top: 2px;
-    margin-left: 2px;
-  }
+  min-width: 0;
 `;
 
-// accounts for whitespace around icon
-export const IconWrapper = styled.span`
-  margin-left: -4px;
-  margin-right: 4px;
-  height: 24px;
-  overflow: hidden;
-  flex-shrink: 0;
-`;
-
-const Actions = styled(EventBoundary)<{ showActions?: boolean }>`
+const Actions = styled(EventBoundary)<{ $showActions?: boolean }>`
   display: inline-flex;
-  visibility: ${(props) => (props.showActions ? "visible" : "hidden")};
+  visibility: ${(props) => (props.$showActions ? "visible" : "hidden")};
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 3px;
+  inset-inline-end: 4px;
   gap: 4px;
   color: ${s("textTertiary")};
   transition: opacity 50ms;
   height: 24px;
+  background: var(--background);
 
   svg {
     color: ${s("textSecondary")};
@@ -187,26 +261,48 @@ const Actions = styled(EventBoundary)<{ showActions?: boolean }>`
   }
 `;
 
+const HiddenDisclosure = styled(Disclosure)`
+  position: inherit;
+  inset-inline-start: initial;
+  display: none;
+  margin-inline-start: -2px;
+  margin-inline-end: 6px;
+`;
+
 const Link = styled(NavLink)<{
   $isActiveDrop?: boolean;
   $isDraft?: boolean;
   $disabled?: boolean;
 }>`
+  &:hover,
+  &:active,
+  &:has([data-state="open"]) {
+    --background: ${s("sidebarHoverBackground")};
+  }
+
+  &[aria-current="page"] ${Actions} {
+    --background: ${s("sidebarActiveBackground")};
+  }
+
+  ${(props) => props.$isActiveDrop && `--background: ${props.theme.slateDark};`}
+
   display: flex;
   position: relative;
   text-overflow: ellipsis;
   font-weight: 475;
-  padding: 6px 16px;
+  padding: ${isMobile() ? 12 : 6}px 16px;
   border-radius: 4px;
-  min-height: 32px;
+  min-height: 30px;
   user-select: none;
-  background: ${(props) =>
-    props.$isActiveDrop ? props.theme.slateDark : "inherit"};
+  white-space: nowrap;
+  background: var(--background);
   color: ${(props) =>
     props.$isActiveDrop ? props.theme.white : props.theme.sidebarText};
   font-size: 16px;
   cursor: var(--pointer);
   overflow: hidden;
+  border: 0;
+  width: 100%;
   ${undraggableOnDesktop()}
 
   ${(props) =>
@@ -222,10 +318,7 @@ const Link = styled(NavLink)<{
       &:after {
         content: "";
         position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
+        inset: 0;
         pointer-events: none;
         border-radius: 4px;
         border: 1.5px dashed ${props.theme.sidebarDraftBorder};
@@ -237,13 +330,43 @@ const Link = styled(NavLink)<{
     transition: fill 50ms;
   }
 
-  &:hover svg {
-    display: inline;
+  &: ${hover},
+  &:has([data-state="open"]) {
+    ${HiddenDisclosure} {
+      display: block;
+    }
+    ${HiddenDisclosure} + ${IconWrapper} {
+      visibility: hidden;
+      opacity: 0;
+      width: 0;
+    }
   }
 
-  & + ${Actions} {
-    background: ${s("sidebarBackground")};
+  ${breakpoint("tablet")`
+    padding-block: 3px;
+    padding-inline: 12px 8px;
+    font-size: 14px;
+  `}
 
+  @media (hover: hover) {
+    &:hover ${Actions},
+    &:active ${Actions},
+    &:has([data-state="open"]) ${Actions} {
+      visibility: visible;
+
+      svg {
+        opacity: 0.75;
+      }
+    }
+
+    &:hover,
+    &:has([data-state="open"]) {
+      color: ${(props) =>
+        props.$isActiveDrop ? props.theme.white : props.theme.text};
+    }
+  }
+
+  & ${Actions} {
     ${NudeButton} {
       background: transparent;
 
@@ -253,43 +376,17 @@ const Link = styled(NavLink)<{
       }
     }
   }
-
-  &[aria-current="page"] + ${Actions} {
-    background: ${s("sidebarActiveBackground")};
-  }
-
-  ${breakpoint("tablet")`
-    padding: 4px 8px 4px 16px;
-    font-size: 14px;
-  `}
-
-  @media (hover: hover) {
-    &:hover + ${Actions}, &:active + ${Actions} {
-      visibility: visible;
-
-      svg {
-        opacity: 0.75;
-      }
-    }
-
-    &:hover {
-      color: ${(props) =>
-        props.$isActiveDrop ? props.theme.white : props.theme.text};
-    }
-  }
-
-  &:hover {
-    ${Disclosure} {
-      opacity: 1;
-    }
-  }
 `;
 
-const Label = styled.div`
+const Label = styled.div<{ $ellipsis: boolean }>`
   position: relative;
   width: 100%;
-  max-height: 4.8em;
   line-height: 24px;
+  margin-inline-start: 2px;
+  min-width: 0;
+  text-align: start;
+
+  ${(props) => props.$ellipsis && ellipsis()}
 
   * {
     unicode-bidi: plaintext;

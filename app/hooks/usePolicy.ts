@@ -1,5 +1,5 @@
-import * as React from "react";
-import Model from "~/models/base/Model";
+import { useEffect } from "react";
+import type Model from "~/models/base/Model";
 import useCurrentUser from "./useCurrentUser";
 import useStores from "./useStores";
 
@@ -20,7 +20,7 @@ export default function usePolicy(entity?: string | Model | null) {
     : "";
   const policy = policies.get(entityId);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (
       entity &&
       typeof entity !== "string" &&

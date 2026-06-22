@@ -1,13 +1,17 @@
-import { Token } from "markdown-it";
+import type Token from "markdown-it/lib/token.mjs";
 import { WarningIcon, InfoIcon, StarredIcon, DoneIcon } from "outline-icons";
 import { wrappingInputRule } from "prosemirror-inputrules";
-import { NodeSpec, Node as ProsemirrorNode, NodeType } from "prosemirror-model";
-import { Command, EditorState, Transaction } from "prosemirror-state";
+import type {
+  NodeSpec,
+  Node as ProsemirrorNode,
+  NodeType,
+} from "prosemirror-model";
+import type { Command, EditorState, Transaction } from "prosemirror-state";
 import * as React from "react";
 import ReactDOM from "react-dom";
-import { Primitive } from "utility-types";
+import type { Primitive } from "utility-types";
 import toggleWrap from "../commands/toggleWrap";
-import { MarkdownSerializerState } from "../lib/markdown/serializer";
+import type { MarkdownSerializerState } from "../lib/markdown/serializer";
 import noticesRule from "../rules/notices";
 import Node from "./Node";
 
@@ -49,10 +53,10 @@ export default class Notice extends Node {
             style: dom.className.includes(NoticeTypes.Tip)
               ? NoticeTypes.Tip
               : dom.className.includes(NoticeTypes.Warning)
-              ? NoticeTypes.Warning
-              : dom.className.includes(NoticeTypes.Success)
-              ? NoticeTypes.Success
-              : undefined,
+                ? NoticeTypes.Warning
+                : dom.className.includes(NoticeTypes.Success)
+                  ? NoticeTypes.Success
+                  : undefined,
           }),
         },
         // Quill editor parsing
@@ -71,8 +75,8 @@ export default class Notice extends Node {
             style: dom.className.includes(NoticeTypes.Warning)
               ? NoticeTypes.Warning
               : dom.className.includes(NoticeTypes.Success)
-              ? NoticeTypes.Success
-              : undefined,
+                ? NoticeTypes.Success
+                : undefined,
           }),
         },
         // Confluence parsing
@@ -83,10 +87,10 @@ export default class Notice extends Node {
             style: dom.className.includes("confluence-information-macro-tip")
               ? NoticeTypes.Success
               : dom.className.includes("confluence-information-macro-note")
-              ? NoticeTypes.Tip
-              : dom.className.includes("confluence-information-macro-warning")
-              ? NoticeTypes.Warning
-              : undefined,
+                ? NoticeTypes.Tip
+                : dom.className.includes("confluence-information-macro-warning")
+                  ? NoticeTypes.Warning
+                  : undefined,
           }),
         },
       ],

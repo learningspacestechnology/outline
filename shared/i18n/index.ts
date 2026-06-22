@@ -1,4 +1,4 @@
-import { locales } from "../utils/date";
+import type { locales } from "../utils/date";
 
 type LanguageOption = {
   label: string;
@@ -9,12 +9,8 @@ type LanguageOption = {
 // locales array in shared/utils/date.ts to enable translation for timestamps.
 export const languageOptions: LanguageOption[] = [
   {
-    label: "English (US)",
-    value: "en_US",
-  },
-  {
-    label: "Čeština (Czech)",
-    value: "cs_CZ",
+    label: "Català (Catalan)",
+    value: "ca_ES",
   },
   {
     label: "简体中文 (Chinese, Simplified)",
@@ -25,16 +21,36 @@ export const languageOptions: LanguageOption[] = [
     value: "zh_TW",
   },
   {
-    label: "Deutsch (German)",
-    value: "de_DE",
+    label: "Čeština (Czech)",
+    value: "cs_CZ",
   },
   {
-    label: "Español (Spanish)",
-    value: "es_ES",
+    label: "Nederlands (Dutch, Netherlands)",
+    value: "nl_NL",
+  },
+  {
+    label: "English (UK)",
+    value: "en_GB",
+  },
+  {
+    label: "English (US)",
+    value: "en_US",
   },
   {
     label: "Français (French)",
     value: "fr_FR",
+  },
+  {
+    label: "Deutsch (German)",
+    value: "de_DE",
+  },
+  {
+    label: "עברית (Hebrew)",
+    value: "he_IL",
+  },
+  {
+    label: "Magyar (Hungarian)",
+    value: "hu_HU",
   },
   {
     label: "Italiano (Italian)",
@@ -49,12 +65,16 @@ export const languageOptions: LanguageOption[] = [
     value: "ko_KR",
   },
   {
-    label: "Nederland (Dutch, Netherlands)",
-    value: "nl_NL",
-  },
-  {
     label: "Norsk Bokmål (Norwegian)",
     value: "nb_NO",
+  },
+  {
+    label: "فارسی (Persian)",
+    value: "fa_IR",
+  },
+  {
+    label: "Polski (Polish)",
+    value: "pl_PL",
   },
   {
     label: "Português (Portuguese, Brazil)",
@@ -65,12 +85,8 @@ export const languageOptions: LanguageOption[] = [
     value: "pt_PT",
   },
   {
-    label: "Polskie (Polish)",
-    value: "pl_PL",
-  },
-  {
-    label: "فارسی (Persian)",
-    value: "fa_IR",
+    label: "Español (Spanish)",
+    value: "es_ES",
   },
   {
     label: "Svenska (Swedish)",

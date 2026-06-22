@@ -1,11 +1,14 @@
 import { MentionType, NotificationEventType } from "@shared/types";
-import { createSubscriptionsForDocument } from "@server/commands/subscriptionCreator";
-import { Document, Notification, User } from "@server/models";
+import {
+  createSubscriptionsForDocument,
+  subscribeUsersToDocument,
+} from "@server/commands/subscriptionCreator";
+import { Document, Group, Notification, User, GroupUser } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import NotificationHelper from "@server/models/helpers/NotificationHelper";
-import { DocumentEvent } from "@server/types";
+import type { DocumentEvent } from "@server/types";
 import { canUserAccessDocument } from "@server/utils/permissions";
-import BaseTask, { TaskPriority } from "./BaseTask";
+import { BaseTask, TaskPriority } from "./base/BaseTask";
 
 export default class DocumentPublishedNotificationsTask extends BaseTask<DocumentEvent> {
   public async perform(event: DocumentEvent) {
@@ -22,22 +25,32 @@ export default class DocumentPublishedNotificationsTask extends BaseTask<Documen
     const mentions = DocumentHelper.parseMentions(document, {
       type: MentionType.User,
     });
+    const userIdsProcessed = new Set<string>();
     const userIdsMentioned: string[] = [];
+    const usersToSubscribe: User[] = [];
 
     for (const mention of mentions) {
-      if (userIdsMentioned.includes(mention.modelId)) {
+      if (userIdsProcessed.has(mention.modelId)) {
         continue;
       }
+      userIdsProcessed.add(mention.modelId);
 
       const recipient = await User.findByPk(mention.modelId);
 
       if (
-        recipient &&
-        recipient.id !== mention.actorId &&
+        !recipient ||
+        recipient.id === mention.actorId ||
+        !(await canUserAccessDocument(recipient, document.id))
+      ) {
+        continue;
+      }
+
+      usersToSubscribe.push(recipient);
+
+      if (
         recipient.subscribedToEventType(
           NotificationEventType.MentionedInDocument
-        ) &&
-        (await canUserAccessDocument(recipient, document.id))
+        )
       ) {
         await Notification.create({
           event: NotificationEventType.MentionedInDocument,
@@ -48,6 +61,62 @@ export default class DocumentPublishedNotificationsTask extends BaseTask<Documen
         });
         userIdsMentioned.push(recipient.id);
       }
+    }
+
+    await subscribeUsersToDocument(usersToSubscribe, document, event);
+
+    // send notifications to users in mentioned groups
+    const groupMentions = DocumentHelper.parseMentions(document, {
+      type: MentionType.Group,
+    });
+    const mentionedGroup: string[] = [];
+    for (const group of groupMentions) {
+      if (mentionedGroup.includes(group.modelId)) {
+        continue;
+      }
+
+      // Check if the group has mentions disabled
+      const groupModel = await Group.findByPk(group.modelId);
+      if (groupModel?.disableMentions) {
+        continue;
+      }
+
+      const usersFromMentionedGroup = await GroupUser.findAll({
+        where: {
+          groupId: group.modelId,
+        },
+        order: [["permission", "ASC"]],
+      });
+
+      const mentionedUser: string[] = [];
+      for (const user of usersFromMentionedGroup) {
+        if (mentionedUser.includes(user.userId)) {
+          continue;
+        }
+
+        const recipient = await User.findByPk(user.userId);
+        if (
+          recipient &&
+          recipient.id !== group.actorId &&
+          recipient.subscribedToEventType(
+            NotificationEventType.GroupMentionedInDocument
+          ) &&
+          (await canUserAccessDocument(recipient, document.id))
+        ) {
+          await Notification.create({
+            event: NotificationEventType.GroupMentionedInDocument,
+            groupId: group.modelId,
+            userId: recipient.id,
+            actorId: group.actorId,
+            teamId: document.teamId,
+            documentId: document.id,
+          });
+
+          mentionedUser.push(user.userId);
+        }
+      }
+
+      mentionedGroup.push(group.modelId);
     }
 
     const recipients = (

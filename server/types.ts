@@ -1,8 +1,8 @@
-import { ParameterizedContext, DefaultContext } from "koa";
-import { IRouterParamContext } from "koa-router";
-import { InferAttributes, Model, Transaction } from "sequelize";
-import { z } from "zod";
-import {
+import type { ParameterizedContext, DefaultContext } from "koa";
+import type { IRouterParamContext } from "koa-router";
+import type { InferAttributes, Model, Transaction } from "sequelize";
+import type { z } from "zod";
+import type {
   CollectionSort,
   NavigationNode,
   Client,
@@ -10,10 +10,13 @@ import {
   JSONValue,
   UnfurlResourceType,
   ProsemirrorData,
+  UnfurlResponse,
 } from "@shared/types";
-import { BaseSchema } from "@server/routes/api/schema";
-import { AccountProvisionerResult } from "./commands/accountProvisioner";
+import type { BaseSchema } from "@server/routes/api/schema";
+import type { AccountProvisionerResult } from "./commands/accountProvisioner";
+import type { OAuthIntent, OAuthState } from "./utils/oauthState";
 import type {
+  AccessRequest,
   ApiKey,
   Attachment,
   AuthenticationProvider,
@@ -22,6 +25,7 @@ import type {
   Team,
   User,
   UserMembership,
+  UserPasskey,
   WebhookSubscription,
   Pin,
   Star,
@@ -36,11 +40,14 @@ import type {
   Share,
   GroupMembership,
   Import,
+  OAuthClient,
 } from "./models";
 
 export enum AuthenticationType {
   API = "api",
   APP = "app",
+  MCP = "mcp",
+  OAUTH = "oauth",
 }
 
 export type AuthenticationResult = AccountProvisionerResult & {
@@ -48,9 +55,16 @@ export type AuthenticationResult = AccountProvisionerResult & {
 };
 
 export type Authentication = {
+  /** The user associated with this session. */
   user: User;
-  token?: string;
+  /** The token used for authenticating API requests, WebSocket connections, etc. */
+  token: string;
+  /** The type of authentication used to create this session (e.g., "api", "app", "oauth"). */
   type?: AuthenticationType;
+  /** The authentication service used to create this session (e.g., "email", "passkeys", "google"). */
+  service?: string;
+  /** The OAuth scopes granted for this session, if applicable. */
+  scope?: string[];
 };
 
 export type Pagination = {
@@ -63,6 +77,9 @@ export type AppState = {
   auth: Authentication | Record<string, never>;
   transaction: Transaction;
   pagination: Pagination;
+  oauthClient?: OAuthClient;
+  oauthIntent?: OAuthIntent;
+  oauthState?: OAuthState;
 };
 
 export type AppContext = ParameterizedContext<AppState, DefaultContext>;
@@ -71,12 +88,14 @@ export type BaseReq = z.infer<typeof BaseSchema>;
 
 export type BaseRes = unknown;
 
-export interface APIContext<ReqT = BaseReq, ResT = BaseRes>
-  extends ParameterizedContext<
-    AppState,
-    DefaultContext & IRouterParamContext<AppState>,
-    ResT
-  > {
+export interface APIContext<
+  ReqT = Partial<BaseReq>,
+  ResT = BaseRes,
+> extends ParameterizedContext<
+  AppState,
+  DefaultContext & IRouterParamContext<AppState>,
+  ResT
+> {
   /** Typed and validated version of request, consisting of validated body, query, etc. */
   input: ReqT;
 
@@ -147,7 +166,8 @@ export type UserEvent = BaseEvent<User> &
           | "users.update"
           | "users.suspend"
           | "users.activate"
-          | "users.delete";
+          | "users.delete"
+          | "users.invite_accepted";
         userId: string;
       }
     | {
@@ -177,6 +197,16 @@ export type UserMembershipEvent = BaseEvent<UserMembership> & {
   };
 };
 
+export type DocumentMovedEvent = BaseEvent<Document> & {
+  name: "documents.move";
+  documentId: string;
+  collectionId: string;
+  data: {
+    collectionIds: string[];
+    documentIds: string[];
+  };
+};
+
 export type DocumentEvent = BaseEvent<Document> &
   (
     | {
@@ -189,34 +219,19 @@ export type DocumentEvent = BaseEvent<Document> &
           | "documents.restore";
         documentId: string;
         collectionId: string;
-        data: {
-          title: string;
+        data?: {
           source?: "import";
         };
       }
     | {
         name: "documents.unpublish";
         documentId: string;
-        collectionId: string;
+        collectionId?: string;
       }
     | {
         name: "documents.unarchive";
         documentId: string;
         collectionId: string;
-        data: {
-          title: string;
-          /** Id of collection from which the document is unarchived */
-          sourceCollectionId: string;
-        };
-      }
-    | {
-        name: "documents.move";
-        documentId: string;
-        collectionId: string;
-        data: {
-          collectionIds: string[];
-          documentIds: string[];
-        };
       }
     | {
         name:
@@ -226,9 +241,7 @@ export type DocumentEvent = BaseEvent<Document> &
         documentId: string;
         collectionId: string;
         createdAt: string;
-        data: {
-          title: string;
-          autosave: boolean;
+        data?: {
           done: boolean;
         };
       }
@@ -237,12 +250,20 @@ export type DocumentEvent = BaseEvent<Document> &
         documentId: string;
         collectionId: string;
         createdAt: string;
-        data: {
-          title: string;
-          previousTitle: string;
-        };
       }
+    | DocumentMovedEvent
+    | AccessRequestEvent
   );
+
+export type TemplateEvent = BaseEvent<Document> & {
+  name:
+    | "templates.create"
+    | "templates.update"
+    | "templates.delete"
+    | "templates.restore";
+  modelId: string;
+  collectionId?: string;
+};
 
 export type EmptyTrashEvent = {
   name: "documents.empty_trash";
@@ -253,7 +274,6 @@ export type EmptyTrashEvent = {
 export type RevisionEvent = BaseEvent<Revision> & {
   name: "revisions.create";
   documentId: string;
-  collectionId: string;
   modelId: string;
 };
 
@@ -293,6 +313,12 @@ export type DocumentUserEvent = BaseEvent<UserMembership> & {
   };
 };
 
+export type AccessRequestEvent = BaseEvent<AccessRequest> & {
+  name: "access_requests.create";
+  modelId: string;
+  documentId: string;
+};
+
 export type DocumentGroupEvent = BaseEvent<GroupMembership> & {
   name: "documents.add_group" | "documents.remove_group";
   documentId: string;
@@ -303,44 +329,17 @@ export type DocumentGroupEvent = BaseEvent<GroupMembership> & {
   };
 };
 
-export type CollectionEvent = BaseEvent<Collection> &
-  (
-    | {
-        name: "collections.create";
-        collectionId: string;
-        data: {
-          name: string;
-          source?: "import";
-        };
-      }
-    | {
-        name:
-          | "collections.update"
-          | "collections.delete"
-          | "collections.archive"
-          | "collections.restore";
-        collectionId: string;
-        data: {
-          name: string;
-          archivedAt: string;
-        };
-      }
-    | {
-        name: "collections.move";
-        collectionId: string;
-        data: {
-          index: string;
-        };
-      }
-    | {
-        name: "collections.permission_changed";
-        collectionId: string;
-        data: {
-          privacyChanged: boolean;
-          sharingChanged: boolean;
-        };
-      }
-  );
+export type CollectionEvent = BaseEvent<Collection> & {
+  name:
+    | "collections.create"
+    | "collections.update"
+    | "collections.delete"
+    | "collections.archive"
+    | "collections.restore"
+    | "collections.move"
+    | "collections.permission_changed";
+  collectionId: string;
+};
 
 export type GroupUserEvent = BaseEvent<UserMembership> & {
   name: "groups.add_user" | "groups.remove_user";
@@ -468,7 +467,18 @@ export type NotificationEvent = BaseEvent<Notification> & {
   membershipId?: string;
 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type OAuthClientEvent = BaseEvent<OAuthClient> & {
+  name: "oauthClients.create" | "oauthClients.update" | "oauthClients.delete";
+  modelId: string;
+};
+
+export type UserPasskeyEvent = BaseEvent<UserPasskey> & {
+  name: "passkeys.create" | "passkeys.update" | "passkeys.delete";
+  modelId: string;
+  userId: string;
+};
+
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export type ImportEvent = BaseEvent<Import<any>> & {
   name:
     | "imports.create"
@@ -484,6 +494,8 @@ export type Event =
   | AuthenticationProviderEvent
   | DocumentEvent
   | DocumentUserEvent
+  | AccessRequestEvent
+  | DocumentMovedEvent
   | DocumentGroupEvent
   | PinEvent
   | CommentEvent
@@ -498,11 +510,14 @@ export type Event =
   | ShareEvent
   | SubscriptionEvent
   | TeamEvent
+  | TemplateEvent
   | UserEvent
   | UserMembershipEvent
   | ViewEvent
   | WebhookSubscriptionEvent
   | NotificationEvent
+  | OAuthClientEvent
+  | UserPasskeyEvent
   | EmptyTrashEvent
   | ImportEvent;
 
@@ -534,7 +549,7 @@ export type DocumentJSONExport = {
   emoji?: string | null;
   icon: string | null;
   color: string | null;
-  data: Record<string, any>;
+  data: ProsemirrorData;
   createdById: string;
   createdByName: string;
   createdByEmail: string | null;
@@ -542,7 +557,6 @@ export type DocumentJSONExport = {
   updatedAt: string;
   publishedAt: string | null;
   fullWidth: boolean;
-  template: boolean;
   parentDocumentId: string | null;
 };
 
@@ -561,7 +575,7 @@ export type CollectionJSONExport = {
     urlId: string;
     name: string;
     data?: ProsemirrorData | null;
-    description?: ProsemirrorData | null;
+    description?: string | null;
     permission?: CollectionPermission | null;
     color?: string | null;
     icon?: string | null;
@@ -576,12 +590,37 @@ export type CollectionJSONExport = {
   };
 };
 
-export type Unfurl = { [x: string]: JSONValue; type: UnfurlResourceType };
+export type UnfurlIssueOrPR =
+  | UnfurlResponse[UnfurlResourceType.Issue]
+  | UnfurlResponse[UnfurlResourceType.PR];
+
+export type UnfurlProject = UnfurlResponse[UnfurlResourceType.Project];
+
+export type UnfurlURL = UnfurlResponse[UnfurlResourceType.URL] & {
+  transformedUnfurl: true;
+};
+
+export type Unfurl =
+  | UnfurlIssueOrPR
+  | UnfurlProject
+  | UnfurlURL
+  | {
+      type: Exclude<
+        UnfurlResourceType,
+        | UnfurlResourceType.Issue
+        | UnfurlResourceType.PR
+        | UnfurlResourceType.Project
+        | UnfurlResourceType.URL
+      >;
+      [x: string]: JSONValue;
+    };
+
+export type UnfurlError = { error: string };
 
 export type UnfurlSignature = (
   url: string,
   actor?: User
-) => Promise<Unfurl | void>;
+) => Promise<Unfurl | UnfurlError | undefined>;
 
 export type UninstallSignature = (integration: Integration) => Promise<void>;
 

@@ -1,7 +1,16 @@
-import { Plugin, Transaction } from "prosemirror-state";
+import type { Transaction } from "prosemirror-state";
+import { Plugin } from "prosemirror-state";
 import Extension from "../lib/Extension";
 
-export default class MaxLength extends Extension {
+/**
+ * Options for the MaxLength extension.
+ */
+type MaxLengthOptions = {
+  /** Maximum allowed document size, in ProseMirror node size units. */
+  maxLength?: number;
+};
+
+export default class MaxLength extends Extension<MaxLengthOptions> {
   get name() {
     return "maxlength";
   }

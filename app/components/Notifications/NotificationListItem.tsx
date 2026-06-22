@@ -5,14 +5,28 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import styled from "styled-components";
 import { s, hover, truncateMultiline } from "@shared/styles";
-import Notification from "~/models/Notification";
-import CommentEditor from "~/scenes/Document/components/CommentEditor";
+import { NotificationEventType } from "@shared/types";
+import type Notification from "~/models/Notification";
 import useStores from "~/hooks/useStores";
-import { Avatar, AvatarSize } from "../Avatar";
+import { Avatar, AvatarSize, AvatarVariant } from "../Avatar";
 import Flex from "../Flex";
 import Text from "../Text";
 import Time from "../Time";
 import { UnreadBadge } from "../UnreadBadge";
+import lazyWithRetry from "~/utils/lazyWithRetry";
+import { ContextMenu } from "../Menu/ContextMenu";
+import { createActionWithChildren } from "~/actions";
+import {
+  notificationMarkRead,
+  notificationMarkUnread,
+  notificationArchive,
+} from "~/actions/definitions/notifications";
+import { NotificationSection } from "~/actions/sections";
+import AccessRequestActions from "./AccessRequestActions";
+
+const CommentEditor = lazyWithRetry(
+  () => import("~/scenes/Document/components/Comments/CommentEditor")
+);
 
 type Props = {
   notification: Notification;
@@ -24,6 +38,10 @@ function NotificationListItem({ notification, onNavigate }: Props) {
   const { collections } = useStores();
   const collectionId = notification.document?.collectionId;
   const collection = collectionId ? collections.get(collectionId) : undefined;
+
+  const isAccessRequestPending =
+    notification.event === NotificationEventType.RequestDocumentAccess &&
+    notification.accessRequestStatus === "pending";
 
   const handleClick: React.MouseEventHandler<HTMLAnchorElement> = (event) => {
     if (event.altKey) {
@@ -38,31 +56,50 @@ function NotificationListItem({ notification, onNavigate }: Props) {
     onNavigate();
   };
 
+  const menuAction = React.useMemo(
+    () =>
+      createActionWithChildren({
+        name: ({ t }) => t("Notification options"),
+        section: NotificationSection,
+        children: [
+          notificationMarkRead(notification),
+          notificationMarkUnread(notification),
+          notificationArchive(notification),
+        ],
+      }),
+    [notification]
+  );
+
   return (
-    <StyledLink to={notification.path ?? ""} onClick={handleClick}>
-      <Container gap={8} $unread={!notification.viewedAt}>
-        <StyledAvatar model={notification.actor} size={AvatarSize.Large} />
-        <Flex column>
-          <Text as="div" size="small">
-            <Text weight="bold">
-              {notification.actor?.name ?? t("Unknown")}
-            </Text>{" "}
-            {notification.eventText(t)}{" "}
-            <Text weight="bold">{notification.subject}</Text>
-          </Text>
-          <Text type="tertiary" size="xsmall">
-            <Time dateTime={notification.createdAt} addSuffix />{" "}
-            {collection && <>&middot; {collection.name}</>}
-          </Text>
-          {notification.comment && (
-            <StyledCommentEditor
-              defaultValue={toJS(notification.comment.data)}
-            />
-          )}
-        </Flex>
-        {notification.viewedAt ? null : <UnreadBadge style={{ right: 20 }} />}
-      </Container>
-    </StyledLink>
+    <ContextMenu action={menuAction} ariaLabel={t("Notification options")}>
+      <StyledLink to={notification.path ?? ""} onClick={handleClick}>
+        <Container gap={8} $unread={!notification.viewedAt}>
+          <StyledAvatar model={notification.actor} />
+          <Flex column>
+            <Text as="div" size="small">
+              <Text weight="bold">
+                {notification.actor?.name ?? t("Unknown")}
+              </Text>{" "}
+              {notification.eventText(t)}{" "}
+              <Text weight="bold">{notification.subject}</Text>
+            </Text>
+            <Text type="tertiary" size="xsmall">
+              <Time dateTime={notification.createdAt} addSuffix />{" "}
+              {collection && <>&middot; {collection.name}</>}
+            </Text>
+            {notification.comment && (
+              <StyledCommentEditor
+                defaultValue={toJS(notification.comment.data)}
+              />
+            )}
+            {isAccessRequestPending && (
+              <AccessRequestActions notification={notification} />
+            )}
+          </Flex>
+          {notification.viewedAt ? null : <UnreadBadge />}
+        </Container>
+      </StyledLink>
+    </ContextMenu>
   );
 }
 
@@ -75,20 +112,26 @@ const StyledLink = styled(Link)`
 const StyledCommentEditor = styled(CommentEditor)`
   font-size: 0.9em;
   margin-top: 4px;
+  pointer-events: none;
 
   ${truncateMultiline(3)}
 `;
 
-const StyledAvatar = styled(Avatar)`
+const StyledAvatar = styled(Avatar).attrs({
+  variant: AvatarVariant.Round,
+  size: AvatarSize.Medium,
+})`
   margin-top: 4px;
 `;
 
 const Container = styled(Flex)<{ $unread: boolean }>`
   position: relative;
-  padding: 8px 12px;
-  padding-right: 40px;
+  padding-block: 8px;
+  padding-inline: 12px 40px;
   border-radius: 4px;
 
+  ${StyledLink}[data-state=open] &,
+  &:has([data-state="open"]),
   &:${hover},
   &:active {
     background: ${s("listItemHoverBackground")};

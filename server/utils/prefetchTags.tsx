@@ -1,26 +1,29 @@
 import * as React from "react";
 import ReactDOMServer from "react-dom/server";
 import env from "@server/env";
-import readManifestFile, { ManifestStructure } from "./readManifestFile";
+import type { ManifestStructure } from "./readManifestFile";
+import readManifestFile from "./readManifestFile";
 
 const prefetchTags = [];
 
-if (env.AWS_S3_ACCELERATE_URL) {
-  prefetchTags.push(
-    <link
-      rel="preconnect"
-      href={env.AWS_S3_ACCELERATE_URL}
-      key={env.AWS_S3_ACCELERATE_URL}
-    />
-  );
-} else if (env.AWS_S3_UPLOAD_BUCKET_URL) {
-  prefetchTags.push(
-    <link
-      rel="preconnect"
-      href={env.AWS_S3_UPLOAD_BUCKET_URL}
-      key={env.AWS_S3_UPLOAD_BUCKET_URL}
-    />
-  );
+if (env.FILE_STORAGE === "s3") {
+  if (env.AWS_S3_ACCELERATE_URL) {
+    prefetchTags.push(
+      <link
+        rel="preconnect"
+        href={env.AWS_S3_ACCELERATE_URL}
+        key={env.AWS_S3_ACCELERATE_URL}
+      />
+    );
+  } else if (env.AWS_S3_UPLOAD_BUCKET_URL) {
+    prefetchTags.push(
+      <link
+        rel="preconnect"
+        href={env.AWS_S3_UPLOAD_BUCKET_URL}
+        key={env.AWS_S3_UPLOAD_BUCKET_URL}
+      />
+    );
+  }
 }
 if (env.CDN_URL) {
   prefetchTags.push(

@@ -1,6 +1,5 @@
 import codemark from "prosemirror-codemark";
-import { toggleMark } from "prosemirror-commands";
-import {
+import type {
   MarkSpec,
   MarkType,
   Node as ProsemirrorNode,
@@ -8,11 +7,13 @@ import {
   Slice,
 } from "prosemirror-model";
 import { Plugin, TextSelection } from "prosemirror-state";
-import { EditorView } from "prosemirror-view";
+import type { EditorView } from "prosemirror-view";
+import { toggleMark } from "../commands/toggleMark";
 import { markInputRuleForPattern } from "../lib/markInputRule";
-import { MarkdownSerializerState } from "../lib/markdown/serializer";
+import type { MarkdownSerializerState } from "../lib/markdown/serializer";
 import { isInCode } from "../queries/isInCode";
 import Mark from "./Mark";
+import { codeWordDecorations } from "../plugins/CodeWordDecorationsPlugin";
 
 export default class Code extends Mark {
   get name() {
@@ -24,6 +25,7 @@ export default class Code extends Mark {
       excludes: "mention placeholder highlight",
       parseDOM: [{ tag: "code", preserveWhitespace: true }],
       toDOM: () => ["code", { class: "inline", spellCheck: "false" }],
+      code: true,
     };
   }
 
@@ -46,8 +48,69 @@ export default class Code extends Mark {
       markType: this.editor.schema.marks.code_inline,
     })[0];
 
+    /**
+     * Helper function to check if cursor is between backticks
+     * and handle the code marking appropriately
+     */
+    const handleTextBetweenBackticks = (
+      view: EditorView,
+      from: number,
+      to: number,
+      text: string | Slice
+    ) => {
+      const { state } = view;
+
+      // Prevent access out of document bounds
+      if (from === 0 || to === state.doc.nodeSize - 1) {
+        return false;
+      }
+
+      // Skip if we're adding a backtick character
+      if (typeof text === "string" && text === "`") {
+        return false;
+      }
+
+      // Check if we're between backticks
+      if (
+        state.doc.textBetween(from - 1, from) === "`" &&
+        state.doc.textBetween(to, to + 1) === "`"
+      ) {
+        const start = from - 1;
+        const end = to + 1;
+
+        if (typeof text === "string") {
+          // Handle text input
+          view.dispatch(
+            state.tr
+              .delete(start, end)
+              .insertText(text, start)
+              .addMark(
+                start,
+                start + text.length,
+                state.schema.marks.code_inline.create()
+              )
+          );
+        } else {
+          // Handle paste/slice
+          view.dispatch(
+            state.tr
+              .replaceRange(start, end, text)
+              .addMark(
+                start,
+                start + text.size,
+                state.schema.marks.code_inline.create()
+              )
+          );
+        }
+        return true;
+      }
+
+      return false;
+    };
+
     return [
       codeCursorPlugin,
+      codeWordDecorations(),
       new Plugin({
         props: {
           // Typing a character inside of two backticks will wrap the character
@@ -58,34 +121,11 @@ export default class Code extends Mark {
             to: number,
             text: string
           ) => {
-            const { state } = view;
-
-            // Prevent access out of document bounds
-            if (from === 0 || to === state.doc.nodeSize - 1 || text === "`") {
+            // Skip this handler during IME composition or it will prevent the
+            if (view.composing) {
               return false;
             }
-
-            if (
-              from === to &&
-              state.doc.textBetween(from - 1, from) === "`" &&
-              state.doc.textBetween(to, to + 1) === "`"
-            ) {
-              const start = from - 1;
-              const end = to + 1;
-              view.dispatch(
-                state.tr
-                  .delete(start, end)
-                  .insertText(text, start)
-                  .addMark(
-                    start,
-                    start + text.length,
-                    state.schema.marks.code_inline.create()
-                  )
-              );
-              return true;
-            }
-
-            return false;
+            return handleTextBetweenBackticks(view, from, to, text);
           },
 
           // Pasting a character inside of two backticks will wrap the character
@@ -93,32 +133,7 @@ export default class Code extends Mark {
           handlePaste: (view: EditorView, _event: Event, slice: Slice) => {
             const { state } = view;
             const { from, to } = state.selection;
-
-            // Prevent access out of document bounds
-            if (from === 0 || to === state.doc.nodeSize - 1) {
-              return false;
-            }
-
-            const start = from - 1;
-            const end = to + 1;
-            if (
-              from === to &&
-              state.doc.textBetween(start, from) === "`" &&
-              state.doc.textBetween(to, end) === "`"
-            ) {
-              view.dispatch(
-                state.tr
-                  .replaceRange(start, end, slice)
-                  .addMark(
-                    start,
-                    start + slice.size,
-                    state.schema.marks.code_inline.create()
-                  )
-              );
-              return true;
-            }
-
-            return false;
+            return handleTextBetweenBackticks(view, from, to, slice);
           },
 
           // Triple clicking inside of an inline code mark will select the entire
@@ -141,6 +156,29 @@ export default class Code extends Mark {
             }
 
             return false;
+          },
+
+          // Handle composition end events for IME input
+          handleDOMEvents: {
+            compositionend: (view: EditorView) => {
+              setTimeout(() => {
+                const { $cursor } = view.state.selection as TextSelection;
+                if (!$cursor) {
+                  return;
+                }
+
+                const from = $cursor.pos - 1;
+                const to = $cursor.pos;
+
+                // Process the composed text after IME composition completes
+                handleTextBetweenBackticks(
+                  view,
+                  from,
+                  to,
+                  view.state.doc.textBetween(from, to)
+                );
+              });
+            },
           },
         },
       }),
@@ -191,6 +229,6 @@ export default class Code extends Mark {
   }
 
   parseMarkdown() {
-    return { mark: "code_inline" };
+    return { mark: "code_inline", noCloseToken: true };
   }
 }

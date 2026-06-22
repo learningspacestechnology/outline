@@ -1,4 +1,4 @@
-import { AnimateSharedLayout } from "framer-motion";
+import { LayoutGroup } from "framer-motion";
 import { transparentize } from "polished";
 import * as React from "react";
 import styled from "styled-components";
@@ -13,6 +13,10 @@ const Nav = styled.nav<{ $shadowVisible?: boolean }>`
 
   -ms-overflow-style: none;
   scrollbar-width: none;
+
+  & > * + * {
+    margin-inline-start: 24px;
+  }
 
   &::-webkit-scrollbar {
     display: none;
@@ -52,7 +56,6 @@ export const Separator = styled.span`
   border-left: 1px solid ${s("divider")};
   position: relative;
   top: 2px;
-  margin-right: 24px;
   margin-top: 6px;
 `;
 
@@ -61,7 +64,7 @@ type Props = {
 };
 
 const Tabs: React.FC = ({ children }: Props) => {
-  const ref = React.useRef<any>();
+  const ref = React.useRef<HTMLElement>(null);
   const [shadowVisible, setShadow] = React.useState(false);
   const { width } = useWindowSize();
 
@@ -84,13 +87,13 @@ const Tabs: React.FC = ({ children }: Props) => {
   }, [width, updateShadows]);
 
   return (
-    <AnimateSharedLayout>
+    <LayoutGroup>
       <Sticky>
         <Nav ref={ref} onScroll={updateShadows} $shadowVisible={shadowVisible}>
           {children}
         </Nav>
       </Sticky>
-    </AnimateSharedLayout>
+    </LayoutGroup>
   );
 };
 

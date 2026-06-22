@@ -1,9 +1,8 @@
 import { observer } from "mobx-react";
-import * as React from "react";
 import { useTranslation, Trans } from "react-i18next";
 import { useHistory } from "react-router-dom";
 import { toast } from "sonner";
-import Document from "~/models/Document";
+import type Document from "~/models/Document";
 import ConfirmationDialog from "~/components/ConfirmationDialog";
 import Flex from "~/components/Flex";
 import useStores from "~/hooks/useStores";

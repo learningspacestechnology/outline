@@ -1,4 +1,4 @@
-import { Integration } from "@server/models";
+import type { Integration } from "@server/models";
 
 export default function presentIntegration(integration: Integration) {
   return {
@@ -9,7 +9,7 @@ export default function presentIntegration(integration: Integration) {
     authenticationId: integration.authenticationId,
     service: integration.service,
     events: integration.events,
-    settings: integration.settings,
+    settings: integration.presentSettings(),
     createdAt: integration.createdAt,
     updatedAt: integration.updatedAt,
   };

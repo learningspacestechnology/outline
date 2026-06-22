@@ -1,9 +1,9 @@
 import invariant from "invariant";
 import { action, runInAction, computed } from "mobx";
 import Star from "~/models/Star";
-import { PaginationParams } from "~/types";
+import type { PaginationParams } from "~/types";
 import { client } from "~/utils/ApiClient";
-import RootStore from "./RootStore";
+import type RootStore from "./RootStore";
 import Store from "./base/Store";
 
 export default class StarsStore extends Store<Star> {
@@ -12,9 +12,7 @@ export default class StarsStore extends Store<Star> {
   }
 
   @action
-  fetchPage = async (
-    params?: PaginationParams | undefined
-  ): Promise<Star[]> => {
+  fetchPage = async (params?: PaginationParams): Promise<Star[]> => {
     this.isFetching = true;
 
     try {

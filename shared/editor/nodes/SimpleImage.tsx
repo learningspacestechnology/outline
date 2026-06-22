@@ -1,22 +1,31 @@
-import { Token } from "markdown-it";
+import type Token from "markdown-it/lib/token.mjs";
 import { InputRule } from "prosemirror-inputrules";
-import { Node as ProsemirrorNode, NodeSpec, NodeType } from "prosemirror-model";
-import { TextSelection, NodeSelection, Command } from "prosemirror-state";
+import type {
+  Node as ProsemirrorNode,
+  NodeSpec,
+  NodeType,
+} from "prosemirror-model";
+import type { Command } from "prosemirror-state";
+import { TextSelection, NodeSelection } from "prosemirror-state";
 import * as React from "react";
-import { Primitive } from "utility-types";
+import type { Primitive } from "utility-types";
 import { getEventFiles } from "../../utils/files";
-import { sanitizeUrl } from "../../utils/urls";
+import { sanitizeImageSrc } from "../../utils/urls";
 import { AttachmentValidation } from "../../validations";
-import insertFiles, { Options } from "../commands/insertFiles";
+import type { Options } from "../commands/insertFiles";
+import insertFiles from "../commands/insertFiles";
 import { default as ImageComponent } from "../components/Image";
-import { MarkdownSerializerState } from "../lib/markdown/serializer";
+import type { MarkdownSerializerState } from "../lib/markdown/serializer";
 import uploadPlaceholderPlugin from "../lib/uploadPlaceholder";
 import { UploadPlugin } from "../plugins/UploadPlugin";
-import { ComponentProps } from "../types";
+import type { ComponentProps } from "../types";
 import Node from "./Node";
+import { LightboxImageFactory } from "../lib/Lightbox";
 
 export default class SimpleImage extends Node {
-  options: Options;
+  options: Options & {
+    userId?: string;
+  };
 
   get name() {
     return "image";
@@ -68,28 +77,26 @@ export default class SimpleImage extends Node {
           "img",
           {
             ...node.attrs,
-            src: sanitizeUrl(node.attrs.src),
+            src: sanitizeImageSrc(node.attrs.src),
             contentEditable: "false",
           },
         ],
       ],
+      leafText: (node) =>
+        node.attrs.alt ? `(image: ${node.attrs.alt})` : "(image)",
     };
   }
 
-  handleSelect =
-    ({ getPos }: { getPos: () => number }) =>
-    (event: React.MouseEvent) => {
-      event.preventDefault();
-
-      const { view } = this.editor;
-      const $pos = view.state.doc.resolve(getPos());
-      const transaction = view.state.tr.setSelection(new NodeSelection($pos));
-      view.dispatch(transaction);
-      view.focus();
+  handleClick =
+    ({ view, getPos }: ComponentProps) =>
+    () => {
+      this.editor.updateActiveLightboxImage(
+        LightboxImageFactory.createLightboxImage(view, getPos())
+      );
     };
 
   component = (props: ComponentProps) => (
-    <ImageComponent {...props} onClick={this.handleSelect(props)} />
+    <ImageComponent {...props} onClick={this.handleClick(props)} />
   );
 
   keys(): Record<string, Command> {
@@ -134,9 +141,7 @@ export default class SimpleImage extends Node {
       node: "image",
       getAttrs: (token: Token) => ({
         src: token.attrGet("src"),
-        alt:
-          (token?.children && token.children[0] && token.children[0].content) ||
-          null,
+        alt: token.content || null,
       }),
     };
   }
@@ -153,8 +158,12 @@ export default class SimpleImage extends Node {
         }
         const { view } = this.editor;
         const { node } = state.selection;
-        const { uploadFile, onFileUploadStart, onFileUploadStop } =
-          this.editor.props;
+        const {
+          uploadFile,
+          onFileUploadStart,
+          onFileUploadStop,
+          onFileUploadProgress,
+        } = this.editor.props;
 
         if (!uploadFile) {
           throw new Error("uploadFile prop is required to replace images");
@@ -174,10 +183,13 @@ export default class SimpleImage extends Node {
             uploadFile,
             onFileUploadStart,
             onFileUploadStop,
-            dictionary: this.options.dictionary,
+            onFileUploadProgress,
             replaceExisting: true,
             attrs: {
               width: node.attrs.width,
+              height: node.attrs.height,
+              alt: node.attrs.alt,
+              layoutClass: node.attrs.layoutClass,
             },
           });
         };

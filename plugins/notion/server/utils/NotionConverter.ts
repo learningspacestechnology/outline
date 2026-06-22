@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
 import type {
   BookmarkBlockObjectResponse,
   BreadcrumbBlockObjectResponse,
   BulletedListItemBlockObjectResponse,
+  ChildDatabaseBlockObjectResponse,
+  ChildPageBlockObjectResponse,
   DividerBlockObjectResponse,
   Heading1BlockObjectResponse,
   Heading2BlockObjectResponse,
@@ -15,6 +18,7 @@ import type {
   ImageBlockObjectResponse,
   EmbedBlockObjectResponse,
   TableBlockObjectResponse,
+  TableOfContentsBlockObjectResponse,
   ToDoBlockObjectResponse,
   EquationBlockObjectResponse,
   CodeBlockObjectResponse,
@@ -28,11 +32,12 @@ import type {
   SyncedBlockBlockObjectResponse,
   LinkToPageBlockObjectResponse,
 } from "@notionhq/client/build/src/api-endpoints";
-import isArray from "lodash/isArray";
+import { isArray } from "es-toolkit/compat";
 import { NoticeTypes } from "@shared/editor/nodes/Notice";
-import { MentionType, ProsemirrorData, ProsemirrorDoc } from "@shared/types";
+import type { ProsemirrorData, ProsemirrorDoc } from "@shared/types";
+import { MentionType } from "@shared/types";
 import Logger from "@server/logging/Logger";
-import { Block } from "../../shared/types";
+import type { Block } from "../../shared/types";
 
 export type NotionPage = PageObjectResponse & {
   children: Block[];
@@ -44,7 +49,7 @@ export class NotionConverter {
    * Nodes which cannot contain block children in Outline, their children
    * will be flattened into the parent.
    */
-  private static nodesWithoutBlockChildren = ["paragraph", "toggle"];
+  private static nodesWithoutBlockChildren = ["paragraph"];
 
   public static page(item: NotionPage): ProsemirrorDoc {
     return {
@@ -57,14 +62,31 @@ export class NotionConverter {
     const mapChild = (
       child: Block
     ): ProsemirrorData | ProsemirrorData[] | undefined => {
-      if (child.type === "child_page" || child.type === "child_database") {
-        return; // this will be created as a nested page, no need to handle/convert.
+      if (child.type === "child_page") {
+        return this.child_page(child);
+      }
+      if (child.type === "child_database") {
+        return this.child_database(child);
       }
 
       // @ts-expect-error Not all blocks have an interface
       if (this[child.type]) {
         // @ts-expect-error Not all blocks have an interface
         const response = this[child.type](child);
+
+        // @ts-expect-error Not all blocks have an interface
+        const canToggle = child[child.type].is_toggleable === true;
+
+        if (canToggle) {
+          return {
+            type: "container_toggle",
+            attrs: {
+              id: randomUUID(),
+            },
+            content: [response, ...this.mapChildren(child)],
+          };
+        }
+
         if (
           response &&
           this.nodesWithoutBlockChildren.includes(response.type) &&
@@ -183,24 +205,28 @@ export class NotionConverter {
       .map(this.rich_text_to_plaintext)
       .join("");
 
-    return {
-      type: "paragraph",
-      content: [
-        {
-          text: caption || item.bookmark.url,
-          type: "text",
-          marks: [
+    const text = caption || item.bookmark.url;
+
+    return text
+      ? {
+          type: "paragraph",
+          content: [
             {
-              type: "link",
-              attrs: {
-                href: item.bookmark.url,
-                title: null,
-              },
+              type: "text",
+              text,
+              marks: [
+                {
+                  type: "link",
+                  attrs: {
+                    href: item.bookmark.url,
+                    title: null,
+                  },
+                },
+              ],
             },
           ],
-        },
-      ],
-    };
+        }
+      : undefined;
   }
 
   private static breadcrumb(_: BreadcrumbBlockObjectResponse) {
@@ -253,7 +279,7 @@ export class NotionConverter {
     };
   }
 
-  private static rich_text(item: RichTextItemResponse) {
+  private static rich_text = (item: RichTextItemResponse) => {
     const annotationToMark: Record<
       keyof RichTextItemResponse["annotations"],
       string
@@ -286,75 +312,84 @@ export class NotionConverter {
         };
       }
       if (item.mention.type === "link_mention") {
-        return {
-          type: "text",
-          text: item.plain_text,
-          marks: [
-            {
-              type: "link",
-              attrs: {
-                href: item.mention.link_mention.href,
-              },
-            },
-          ],
-        };
+        const text = item.plain_text || item.mention.link_mention.href;
+
+        return text
+          ? {
+              type: "text",
+              text,
+              marks: [
+                {
+                  type: "link",
+                  attrs: {
+                    href: item.mention.link_mention.href,
+                  },
+                },
+              ],
+            }
+          : undefined;
       }
       if (item.mention.type === "link_preview") {
+        const text = item.plain_text || item.mention.link_preview.url;
+
+        return text
+          ? {
+              type: "text",
+              text: item.plain_text || item.mention.link_preview.url,
+              marks: [
+                {
+                  type: "link",
+                  attrs: {
+                    href: item.mention.link_preview.url,
+                  },
+                },
+              ],
+            }
+          : undefined;
+      }
+
+      if (item.plain_text) {
         return {
           type: "text",
           text: item.plain_text,
-          marks: [
-            {
-              type: "link",
-              attrs: {
-                href: item.mention.link_preview.url,
-              },
-            },
-          ],
         };
       }
 
-      if (!item.plain_text) {
-        return undefined;
-      }
-
-      return {
-        type: "text",
-        text: item.plain_text,
-      };
-    }
-
-    if (item.type === "equation") {
-      return {
-        type: "math_inline",
-        content: [
-          {
-            type: "text",
-            text: item.equation.expression,
-          },
-        ],
-      };
-    }
-
-    if (!item.text.content) {
       return undefined;
     }
 
-    return {
-      type: "text",
-      text: item.text.content,
-      marks: [
-        ...mapAttrs(),
-        ...(item.text.link
-          ? [{ type: "link", attrs: { href: item.text.link.url } }]
-          : []),
-      ].filter(Boolean),
-    };
-  }
+    if (item.type === "equation") {
+      return item.equation.expression
+        ? {
+            type: "math_inline",
+            content: [
+              {
+                type: "text",
+                text: item.equation.expression,
+              },
+            ],
+          }
+        : undefined;
+    }
 
-  private static rich_text_to_plaintext(item: RichTextItemResponse) {
-    return item.plain_text;
-  }
+    if (item.text.content) {
+      return {
+        type: "text",
+        text: item.text.content,
+        marks: [
+          ...mapAttrs(),
+          ...(item.text.link
+            ? [{ type: "link", attrs: { href: item.text.link.url } }]
+            : []),
+        ].filter(Boolean),
+      };
+    }
+
+    return undefined;
+  };
+
+  private static rich_text_to_plaintext = (item: RichTextItemResponse) =>
+    item.plain_text;
 
   private static divider(_: DividerBlockObjectResponse) {
     return {
@@ -454,20 +489,58 @@ export class NotionConverter {
   }
 
   private static link_preview(item: LinkPreviewBlockObjectResponse) {
+    return item.link_preview.url
+      ? {
+          type: "paragraph",
+          content: [
+            {
+              type: "text",
+              text: item.link_preview.url,
+              marks: [
+                {
+                  type: "link",
+                  attrs: {
+                    href: item.link_preview.url,
+                  },
+                },
+              ],
+            },
+          ],
+        }
+      : undefined;
+  }
+
+  private static child_page(
+    item: Block<ChildPageBlockObjectResponse>
+  ): ProsemirrorData {
     return {
       type: "paragraph",
       content: [
         {
-          type: "text",
-          text: item.link_preview.url,
-          marks: [
-            {
-              type: "link",
-              attrs: {
-                href: item.link_preview.url,
-              },
-            },
-          ],
+          type: "mention",
+          attrs: {
+            type: MentionType.Document,
+            modelId: item.id,
+            label: item.child_page.title,
+          },
+        },
+      ],
+    };
+  }
+
+  private static child_database(
+    item: Block<ChildDatabaseBlockObjectResponse>
+  ): ProsemirrorData {
+    return {
+      type: "paragraph",
+      content: [
+        {
+          type: "mention",
+          attrs: {
+            type: MentionType.Document,
+            modelId: item.id,
+            label: item.child_database.title,
+          },
         },
       ],
     };
@@ -513,7 +586,7 @@ export class NotionConverter {
 
   private static table(
     item: TableBlockObjectResponse & {
-      children: Array<{
+      children?: Array<{
         table_row: {
           cells: Array<Array<RichTextItemResponse>>;
         };
@@ -524,7 +597,7 @@ export class NotionConverter {
   ) {
     return {
       type: "table",
-      content: item.children.map((tr, y) => ({
+      content: (item.children ?? []).map((tr, y) => ({
         type: "tr",
         content: tr.table_row.cells.map((td, x) => ({
           type:
@@ -543,10 +616,23 @@ export class NotionConverter {
     };
   }
 
-  private static toggle(item: ToggleBlockObjectResponse) {
+  private static table_of_contents(_: TableOfContentsBlockObjectResponse) {
+    return undefined;
+  }
+
+  private static toggle(item: Block<ToggleBlockObjectResponse>) {
     return {
-      type: "paragraph",
-      content: item.toggle.rich_text.map(this.rich_text).filter(Boolean),
+      type: "container_toggle",
+      attrs: {
+        id: randomUUID(),
+      },
+      content: [
+        {
+          type: "paragraph",
+          content: item.toggle.rich_text.map(this.rich_text).filter(Boolean),
+        },
+        ...this.mapChildren(item),
+      ],
     };
   }
 

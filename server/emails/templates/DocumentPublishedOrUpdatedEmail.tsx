@@ -1,14 +1,16 @@
 import * as React from "react";
 import { NotificationEventType, TeamPreference } from "@shared/types";
 import { Day } from "@shared/utils/time";
-import { Document, Collection, Revision } from "@server/models";
+import type { Collection } from "@server/models";
+import { Document, Revision } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import HTMLHelper from "@server/models/helpers/HTMLHelper";
 import NotificationSettingsHelper from "@server/models/helpers/NotificationSettingsHelper";
 import SubscriptionHelper from "@server/models/helpers/SubscriptionHelper";
 import { can } from "@server/policies";
 import { CacheHelper } from "@server/utils/CacheHelper";
-import BaseEmail, { EmailMessageCategory, EmailProps } from "./BaseEmail";
+import type { EmailProps } from "./BaseEmail";
+import BaseEmail, { EmailMessageCategory } from "./BaseEmail";
 import Body from "./components/Body";
 import Button from "./components/Button";
 import Diff from "./components/Diff";
@@ -86,7 +88,8 @@ export default class DocumentPublishedOrUpdatedEmail extends BaseEmail<
           }
           return;
         },
-        30
+        30,
+        10000
       );
     }
 
@@ -105,20 +108,26 @@ export default class DocumentPublishedOrUpdatedEmail extends BaseEmail<
   eventName(eventType: NotificationEventType) {
     switch (eventType) {
       case NotificationEventType.PublishDocument:
-        return "published";
+        return this.t("published");
       case NotificationEventType.UpdateDocument:
-        return "updated";
+        return this.t("updated");
       default:
         return "";
     }
   }
 
   protected subject({ document, eventType }: Props) {
-    return `“${document.titleWithDefault}” ${this.eventName(eventType)}`;
+    return this.t(`“{{ documentTitle }}” {{ eventName }}`, {
+      documentTitle: document.titleWithDefault,
+      eventName: this.eventName(eventType),
+    });
   }
 
   protected preview({ actorName, eventType }: Props): string {
-    return `${actorName} ${this.eventName(eventType)} a document`;
+    return this.t("{{ actorName }} {{ eventName }} a document", {
+      actorName,
+      eventName: this.eventName(eventType),
+    });
   }
 
   protected fromName({ actorName }: Props) {
@@ -144,13 +153,15 @@ export default class DocumentPublishedOrUpdatedEmail extends BaseEmail<
     const eventName = this.eventName(eventType);
 
     return `
-"${document.titleWithDefault}" ${eventName}
+${this.t(`"{{ documentTitle }}" {{ eventName }}`, { documentTitle: document.titleWithDefault, eventName })}
 
-${actorName} ${eventName} the document "${document.titleWithDefault}"${
-      collection?.name ? `, in the ${collection.name} collection` : ""
+${this.t(`{{ actorName }} {{ eventName }} the document "{{ documentTitle }}"`, { actorName, eventName, documentTitle: document.titleWithDefault })}${
+      collection?.name
+        ? `, ${this.t("in the {{ collectionName }} collection", { collectionName: collection.name })}`
+        : ""
     }.
 
-Open Document: ${teamUrl}${document.url}
+${this.t("Open Document")}: ${teamUrl}${document.url}
 `;
   }
 
@@ -170,18 +181,33 @@ Open Document: ${teamUrl}${document.url}
     return (
       <EmailTemplate
         previewText={this.preview(props)}
-        goToAction={{ url: documentLink, name: "View Document" }}
+        goToAction={{ url: documentLink, name: this.t("View Document") }}
       >
         <Header />
 
         <Body>
           <Heading>
-            “{document.titleWithDefault}” {eventName}
+            {this.t(`“{{ documentTitle }}” {{ eventName }}`, {
+              documentTitle: document.titleWithDefault,
+              eventName,
+            })}
           </Heading>
           <p>
-            {actorName} {eventName} the document{" "}
+            {this.t("{{ actorName }} {{ eventName }} the document", {
+              actorName,
+              eventName,
+            })}{" "}
             <a href={documentLink}>{document.titleWithDefault}</a>
-            {collection?.name ? <>, in the {collection.name} collection</> : ""}
+            {collection?.name ? (
+              <>
+                ,{" "}
+                {this.t("in the {{ collectionName }} collection", {
+                  collectionName: collection.name,
+                })}
+              </>
+            ) : (
+              ""
+            )}
             .
           </p>
           {body && (
@@ -194,18 +220,21 @@ Open Document: ${teamUrl}${document.url}
             </>
           )}
           <p>
-            <Button href={documentLink}>Open Document</Button>
+            <Button href={documentLink}>{this.t("Open Document")}</Button>
           </p>
         </Body>
 
-        <Footer unsubscribeUrl={unsubscribeUrl}>
+        <Footer
+          unsubscribeUrl={unsubscribeUrl}
+          unsubscribeText={this.t("Unsubscribe from these emails")}
+        >
           <Link
             href={SubscriptionHelper.unsubscribeUrl(
               props.userId,
               props.documentId
             )}
           >
-            Unsubscribe from this doc
+            {this.t("Unsubscribe from this doc")}
           </Link>
         </Footer>
       </EmailTemplate>

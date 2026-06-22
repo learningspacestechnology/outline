@@ -3,9 +3,10 @@ import * as React from "react";
 import { useTranslation, Trans } from "react-i18next";
 import styled from "styled-components";
 import { IntegrationService, IntegrationType } from "@shared/types";
-import Collection from "~/models/Collection";
-import Integration from "~/models/Integration";
+import type Collection from "~/models/Collection";
+import type Integration from "~/models/Integration";
 import { ConnectedButton } from "~/scenes/Settings/components/ConnectedButton";
+import { IntegrationScene } from "~/scenes/Settings/components/IntegrationScene";
 import SettingRow from "~/scenes/Settings/components/SettingRow";
 import Flex from "~/components/Flex";
 import Heading from "~/components/Heading";
@@ -13,7 +14,6 @@ import CollectionIcon from "~/components/Icons/CollectionIcon";
 import List from "~/components/List";
 import ListItem from "~/components/List/Item";
 import Notice from "~/components/Notice";
-import Scene from "~/components/Scene";
 import Text from "~/components/Text";
 import env from "~/env";
 import useCurrentTeam from "~/hooks/useCurrentTeam";
@@ -34,13 +34,7 @@ function Slack() {
   const error = query.get("error");
 
   React.useEffect(() => {
-    void collections.fetchPage({
-      limit: 100,
-    });
-    void integrations.fetchPage({
-      service: IntegrationService.Slack,
-      limit: 100,
-    });
+    void collections.fetchAll();
   }, [collections, integrations]);
 
   const commandIntegration = integrations.find({
@@ -67,7 +61,7 @@ function Slack() {
   const appName = env.APP_NAME;
 
   return (
-    <Scene title="Slack" icon={<SlackIcon />}>
+    <IntegrationScene title="Slack" icon={<SlackIcon />}>
       <Heading>Slack</Heading>
 
       {error === "access_denied" && (
@@ -107,11 +101,9 @@ function Slack() {
             />
           ) : (
             <SlackButton
+              type={IntegrationType.LinkedAccount}
+              state={{ teamId: team.id }}
               redirectUri={SlackUtils.connectUrl()}
-              state={SlackUtils.createState(
-                team.id,
-                IntegrationType.LinkedAccount
-              )}
               label={t("Connect")}
             />
           )}
@@ -147,12 +139,10 @@ function Slack() {
                 />
               ) : (
                 <SlackButton
+                  type={IntegrationType.Command}
                   scopes={["commands", "links:read", "links:write"]}
+                  state={{ teamId: team.id }}
                   redirectUri={SlackUtils.connectUrl()}
-                  state={SlackUtils.createState(
-                    team.id,
-                    IntegrationType.Command
-                  )}
                   icon={<SlackIcon />}
                 />
               )}
@@ -189,13 +179,13 @@ function Slack() {
                   image={<CollectionIcon collection={collection} />}
                   actions={
                     <SlackButton
+                      type={IntegrationType.Post}
                       scopes={["incoming-webhook"]}
+                      state={{
+                        teamId: team.id,
+                        collectionId: collection.id,
+                      }}
                       redirectUri={SlackUtils.connectUrl()}
-                      state={SlackUtils.createState(
-                        team.id,
-                        IntegrationType.Post,
-                        { collectionId: collection.id }
-                      )}
                       label={t("Connect")}
                     />
                   }
@@ -205,7 +195,7 @@ function Slack() {
           </List>
         </>
       )}
-    </Scene>
+    </IntegrationScene>
   );
 }
 

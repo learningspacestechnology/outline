@@ -1,4 +1,4 @@
-import { InferAttributes, InferCreationAttributes } from "sequelize";
+import type { InferAttributes, InferCreationAttributes } from "sequelize";
 import {
   Table,
   ForeignKey,
@@ -38,7 +38,7 @@ class SearchQuery extends Model<
   /**
    * Where the query originated.
    */
-  @Column(DataType.ENUM("slack", "app", "api"))
+  @Column(DataType.ENUM("slack", "app", "api", "oauth"))
   source: string;
 
   /**
@@ -46,6 +46,12 @@ class SearchQuery extends Model<
    */
   @Column
   results: number;
+
+  /**
+   * How long the search took to execute, in milliseconds.
+   */
+  @Column
+  duration: number;
 
   /**
    * User score for the results for this query, -1 for negative, 1 for positive, null for neutral.

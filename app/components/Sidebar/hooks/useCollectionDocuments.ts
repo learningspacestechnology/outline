@@ -1,39 +1,38 @@
-import * as React from "react";
+import { useMemo } from "react";
 import { sortNavigationNodes } from "@shared/utils/collections";
-import Collection from "~/models/Collection";
-import Document from "~/models/Document";
+import type Collection from "~/models/Collection";
+import type Document from "~/models/Document";
 
 export default function useCollectionDocuments(
   collection: Collection | undefined,
   activeDocument: Document | undefined
 ) {
-  return React.useMemo(() => {
+  const insertDraftDocument = !!(
+    activeDocument &&
+    activeDocument.isActive &&
+    activeDocument.isDraft &&
+    activeDocument.collectionId === collection?.id &&
+    !activeDocument.parentDocumentId
+  );
+
+  // Only subscribe to asNavigationNode when we actually need to insert a draft
+  // into the sorted list. This avoids every CollectionLinkChildren observer
+  // re-rendering on every title keystroke.
+  const draftNavNode = insertDraftDocument
+    ? activeDocument?.asNavigationNode
+    : undefined;
+
+  return useMemo(() => {
     if (!collection?.sortedDocuments) {
       return undefined;
     }
 
-    const insertDraftDocument =
-      activeDocument?.isActive &&
-      activeDocument?.isDraft &&
-      activeDocument?.collectionId === collection.id &&
-      !activeDocument?.parentDocumentId;
-
-    return insertDraftDocument
+    return draftNavNode
       ? sortNavigationNodes(
-          [activeDocument.asNavigationNode, ...collection.sortedDocuments],
+          [draftNavNode, ...collection.sortedDocuments],
           collection.sort,
           false
         )
       : collection.sortedDocuments;
-  }, [
-    activeDocument?.isActive,
-    activeDocument?.isDraft,
-    activeDocument?.collectionId,
-    activeDocument?.parentDocumentId,
-    activeDocument?.asNavigationNode,
-    collection,
-    collection?.sortedDocuments,
-    collection?.id,
-    collection?.sort,
-  ]);
+  }, [draftNavNode, collection?.sortedDocuments, collection?.sort]);
 }

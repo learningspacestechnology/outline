@@ -1,6 +1,6 @@
-import pick from "lodash/pick";
-import { observable, action } from "mobx";
-import { JSONObject } from "@shared/types";
+import { isEqual, pick } from "es-toolkit/compat";
+import { observable, action, toJS } from "mobx";
+import type { JSONObject } from "@shared/types";
 import type Store from "~/stores/base/Store";
 import Logger from "~/utils/Logger";
 import { getFieldsForModel } from "../decorators/Field";
@@ -27,7 +27,7 @@ export default abstract class Model {
 
   store: Store<Model>;
 
-  constructor(fields: Record<string, any>, store: Store<Model>) {
+  constructor(fields: Record<string, unknown>, store: Store<Model>) {
     this.store = store;
     this.updateData(fields);
     this.isNew = !this.id;
@@ -42,7 +42,7 @@ export default abstract class Model {
   async loadRelations(
     this: Model,
     options: { withoutPolicies?: boolean } = {}
-  ): Promise<any> {
+  ): Promise<unknown> {
     // this is to ensure that multiple loads don’t happen in parallel
     if (this.loadingRelations) {
       return this.loadingRelations;
@@ -89,7 +89,7 @@ export default abstract class Model {
    * @returns A promise that resolves with the updated model
    */
   save = async (
-    params?: Record<string, any>,
+    params?: Record<string, unknown>,
     options?: Record<string, string | boolean | number | undefined>
   ): Promise<Model> => {
     const isNew = this.isNew;
@@ -119,7 +119,7 @@ export default abstract class Model {
       );
 
       // if saving is successful set the new values on the model itself
-      this.updateData({ ...params, ...model });
+      this.updateData(Object.assign({}, params, model));
 
       if (isNew) {
         LifecycleManager.executeHooks(this.constructor, "afterCreate", this);
@@ -133,7 +133,7 @@ export default abstract class Model {
     }
   };
 
-  updateData = action((data: Partial<Model>) => {
+  updateData = action((data: Record<string, unknown>) => {
     if (this.initialized) {
       LifecycleManager.executeHooks(this.constructor, "beforeChange", this);
     }
@@ -147,9 +147,13 @@ export default abstract class Model {
           continue;
         }
         // @ts-expect-error TODO
+        if (isEqual(toJS(this[key]), data[key])) {
+          continue;
+        }
+        // @ts-expect-error TODO
         this[key] = data[key];
       } catch (error) {
-        Logger.warn(`Error setting ${key} on model`, error);
+        Logger.warn(`Error setting ${key} on model`, { error });
       }
     }
 
@@ -192,7 +196,7 @@ export default abstract class Model {
    *
    * @returns A plain object representation of the model
    */
-  toAPI = (): Record<string, any> => {
+  toAPI = (): Partial<Model> => {
     const fields = getFieldsForModel(this);
     return pick(this, fields);
   };
@@ -208,7 +212,7 @@ export default abstract class Model {
 
     for (const property in this) {
       if (
-        // eslint-disable-next-line no-prototype-builtins
+        // oxlint-disable-next-line no-prototype-builtins
         this.hasOwnProperty(property) &&
         !["persistedAttributes", "store", "isSaving", "isNew"].includes(
           property
@@ -242,7 +246,7 @@ export default abstract class Model {
   protected persistedAttributes: Partial<Model> = {};
 
   /** A promise that resolves when all relations have been loaded. */
-  private loadingRelations: Promise<any[]> | undefined;
+  private loadingRelations: Promise<unknown[]> | undefined;
 
   /** A boolean representing if the constructor has been called. */
   private initialized = false;

@@ -1,6 +1,5 @@
 import { observer } from "mobx-react";
 import { TrashIcon } from "outline-icons";
-import * as React from "react";
 import { useTranslation } from "react-i18next";
 import Button from "~/components/Button";
 import Empty from "~/components/Empty";
@@ -9,13 +8,12 @@ import PaginatedDocumentList from "~/components/PaginatedDocumentList";
 import Scene from "~/components/Scene";
 import Subheading from "~/components/Subheading";
 import { permanentlyDeleteDocumentsInTrash } from "~/actions/definitions/documents";
-import useActionContext from "~/hooks/useActionContext";
 import useStores from "~/hooks/useStores";
 
 function Trash() {
   const { t } = useTranslation();
   const { documents } = useStores();
-  const context = useActionContext();
+
   return (
     <Scene
       icon={<TrashIcon />}
@@ -25,7 +23,7 @@ function Trash() {
           <Button
             neutral
             action={permanentlyDeleteDocumentsInTrash}
-            context={context}
+            hideOnActionDisabled
           >
             {t("Empty trash")}
           </Button>

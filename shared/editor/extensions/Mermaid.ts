@@ -1,68 +1,153 @@
-import debounce from "lodash/debounce";
-import last from "lodash/last";
-import sortBy from "lodash/sortBy";
-import type MermaidUnsafe from "mermaid";
-import { Node } from "prosemirror-model";
-import {
-  Plugin,
-  PluginKey,
-  TextSelection,
-  Transaction,
-} from "prosemirror-state";
-import { Decoration, DecorationSet } from "prosemirror-view";
+import { last, sortBy } from "es-toolkit/compat";
+import { t } from "i18next";
 import { v4 as uuidv4 } from "uuid";
-import { isCode } from "../lib/isCode";
-import { isRemoteTransaction } from "../lib/multiplayer";
+import type MermaidUnsafe from "mermaid";
+import type { IconPack } from "@fortawesome/fontawesome-common-types";
+import type { Node } from "prosemirror-model";
+import type { Transaction } from "prosemirror-state";
+import { NodeSelection, Plugin, PluginKey } from "prosemirror-state";
+import { Decoration, DecorationSet } from "prosemirror-view";
+import { toast } from "sonner";
+import { errToString } from "../../utils/error";
+import { isCode, isMermaid } from "../lib/isCode";
+import { isRemoteTransaction, mapDecorations } from "../lib/multiplayer";
 import { findBlockNodes } from "../queries/findChildren";
-import { NodeWithPos } from "../types";
+import { findParentNode } from "../queries/findParentNode";
+import type { NodeWithPos } from "../types";
+import type { Editor } from "../../../app/editor";
+import { LightboxImageFactory } from "../lib/Lightbox";
+import { hashString } from "../../utils/string";
+import { sanitizeUrl } from "../../utils/urls";
 
-type MermaidState = {
+export const pluginKey = new PluginKey("mermaid");
+
+export type MermaidState = {
   decorationSet: DecorationSet;
   isDark: boolean;
+  editingId?: string;
 };
 
+// The `v2` namespace discards entries cached before the #11782 fix, so
+// previously mis-sized diagrams are re-rendered instead of served from cache.
+const STORAGE_PREFIX = "mermaid:v2:";
+const MAX_STORAGE_ENTRIES = 20;
+
 class Cache {
-  static get(key: string) {
-    return this.data.get(key);
+  /** Get a cached SVG by diagram text and theme. */
+  static get(key: string): string | undefined {
+    try {
+      const hash = hashString(key);
+      const value = sessionStorage.getItem(STORAGE_PREFIX + hash);
+      if (value) {
+        this.touchLru(hash);
+        return value;
+      }
+    } catch {
+      // sessionStorage unavailable
+    }
+    return undefined;
   }
 
+  /** Cache a rendered SVG in sessionStorage. */
   static set(key: string, value: string) {
-    this.data.set(key, value);
-
-    if (this.data.size > this.maxSize) {
-      this.data.delete(this.data.keys().next().value);
+    try {
+      const hash = hashString(key);
+      this.touchLru(hash);
+      this.pruneStorage();
+      sessionStorage.setItem(STORAGE_PREFIX + hash, value);
+    } catch {
+      // sessionStorage full or unavailable
     }
   }
 
-  private static maxSize = 20;
-  private static data: Map<string, string> = new Map();
+  /** Move or append a hash to the end (most recent) of the LRU list. */
+  private static touchLru(hash: string) {
+    const lru = this.getLru();
+    const idx = lru.indexOf(hash);
+    if (idx !== -1) {
+      lru.splice(idx, 1);
+    }
+    lru.push(hash);
+    sessionStorage.setItem(STORAGE_PREFIX + "lru", JSON.stringify(lru));
+  }
+
+  /** Evict least-recently-used entries when over the limit. */
+  private static pruneStorage() {
+    const lru = this.getLru();
+
+    while (lru.length > MAX_STORAGE_ENTRIES) {
+      const evict = lru.shift()!;
+      sessionStorage.removeItem(STORAGE_PREFIX + evict);
+    }
+
+    sessionStorage.setItem(STORAGE_PREFIX + "lru", JSON.stringify(lru));
+  }
+
+  /** Read the LRU order list from sessionStorage. */
+  private static getLru(): string[] {
+    try {
+      const raw = sessionStorage.getItem(STORAGE_PREFIX + "lru");
+      if (raw) {
+        return JSON.parse(raw);
+      }
+    } catch {
+      // corrupted or unavailable
+    }
+    return [];
+  }
 }
 
 let mermaid: typeof MermaidUnsafe;
 
-type RendererFunc = (
-  block: { node: Node; pos: number },
-  isDark: boolean
-) => void;
+/** Minimal Iconify JSON icon set format required by Mermaid's `registerIconPacks` API. */
+interface IconifyIconSet {
+  prefix: string;
+  icons: Record<string, { body: string; width: number; height: number }>;
+}
+
+/**
+ * Converts a FontAwesome icon pack to the Iconify JSON format expected by Mermaid's
+ * `registerIconPacks` API.
+ *
+ * @param pack the FontAwesome icon pack to convert.
+ * @param prefix the Iconify prefix to use (e.g. "fa-solid" or "fa-brands").
+ * @returns an Iconify-compatible JSON icon set.
+ */
+function fontAwesomeToIconify(pack: IconPack, prefix: string): IconifyIconSet {
+  const icons: IconifyIconSet["icons"] = {};
+
+  for (const iconDef of Object.values(pack)) {
+    // icon array layout: [width, height, ligatures, unicode, svgPathData]
+    if (!iconDef.iconName || !iconDef.icon) {
+      continue;
+    }
+    const [width, height, , , paths] = iconDef.icon;
+    const body = Array.isArray(paths)
+      ? paths.map((p) => `<path d="${p}"/>`).join("")
+      : `<path d="${paths}"/>`;
+    icons[iconDef.iconName] = { body, width, height };
+  }
+
+  return { prefix, icons };
+}
 
 class MermaidRenderer {
   readonly diagramId: string;
   readonly element: HTMLElement;
   readonly elementId: string;
+  readonly editor: Editor;
 
-  constructor() {
+  constructor(editor: Editor) {
     this.diagramId = uuidv4();
     this.elementId = `mermaid-diagram-wrapper-${this.diagramId}`;
     this.element =
       document.getElementById(this.elementId) || document.createElement("div");
     this.element.id = this.elementId;
     this.element.classList.add("mermaid-diagram-wrapper");
+    this.editor = editor;
   }
 
-  renderImmediately = async (
-    block: { node: Node; pos: number },
-    isDark: boolean
-  ) => {
+  render = async (block: { node: Node; pos: number }, isDark: boolean) => {
     const element = this.element;
     const text = block.node.textContent;
 
@@ -74,44 +159,103 @@ class MermaidRenderer {
       return;
     }
 
-    // Create a temporary element that will render the diagram off-screen. This is necessary
-    // as Mermaid will error if the element is not visible, such as if the heading is collapsed
+    // Create a temporary element for rendering. We use visibility:hidden instead of
+    // offscreen positioning so the browser computes correct bounding boxes for SVG
+    // elements — offscreen elements can produce incorrect getBBox() results, leading
+    // to wrong viewBox dimensions (see mermaid-js/mermaid#6146).
     const renderElement = document.createElement("div");
-    renderElement.style.position = "absolute";
-    renderElement.style.left = "-9999px";
-    renderElement.style.top = "-9999px";
+    const tempId =
+      "offscreen-mermaid-" + Math.random().toString(36).substr(2, 9);
+    renderElement.id = tempId;
+    renderElement.style.position = "fixed";
+    renderElement.style.visibility = "hidden";
+    renderElement.style.top = "0";
+    renderElement.style.left = "0";
+    const width = this.editor.view?.dom.clientWidth ?? window.innerWidth;
+    renderElement.style.width = `${width}px`;
+    renderElement.style.zIndex = "-1";
     document.body.appendChild(renderElement);
 
     try {
-      mermaid ??= (await import("mermaid")).default;
+      if (!mermaid) {
+        mermaid = (await import("mermaid")).default;
+        mermaid.registerLayoutLoaders([
+          {
+            name: "elk",
+            loader: async () => {
+              const { default: elkLayouts } =
+                await import("@mermaid-js/layout-elk");
+              const elkDef = elkLayouts.find(
+                (d: { name: string }) => d.name === "elk"
+              );
+              if (!elkDef) {
+                throw new Error("ELK layout not found");
+              }
+              return elkDef.loader();
+            },
+          },
+        ]);
+        mermaid.registerIconPacks([
+          {
+            name: "fa-solid",
+            loader: async () => {
+              const { fas } = await import("@fortawesome/free-solid-svg-icons");
+              return fontAwesomeToIconify(fas, "fa-solid");
+            },
+          },
+          {
+            name: "fa-brands",
+            loader: async () => {
+              const { fab } =
+                await import("@fortawesome/free-brands-svg-icons");
+              return fontAwesomeToIconify(fab, "fa-brands");
+            },
+          },
+        ]);
+      }
       mermaid.initialize({
         startOnLoad: true,
+        suppressErrorRendering: true,
         // TODO: Make dynamic based on the width of the editor or remove in
         // the future if Mermaid is able to handle this automatically.
         gantt: { useWidth: 700 },
         pie: { useWidth: 700 },
-        fontFamily: "inherit",
+        fontFamily: getComputedStyle(this.element).fontFamily || "inherit",
         theme: isDark ? "dark" : "default",
         darkMode: isDark,
       });
 
-      const { svg, bindFunctions } = await mermaid.render(
-        `mermaid-diagram-${this.diagramId}`,
-        text,
-        // If the element is not visible we use an off-screen element to render the diagram
-        element.offsetParent === null ? renderElement : element
-      );
-      this.currentTextContent = text;
+      const { svg, bindFunctions } = await mermaid.render(tempId, text);
 
-      // Cache the rendered SVG so we won't need to calculate it again in the same session
-      if (text) {
-        Cache.set(cacheKey, svg);
-      }
       element.classList.remove("parse-error", "empty");
       element.innerHTML = svg;
 
       // Allow the user to interact with the diagram
       bindFunctions?.(element);
+
+      // Mermaid sizes the SVG from a getBBox() taken in the hidden render
+      // element, which is unreliable on high-DPI/RDP displays and leaves
+      // diagrams too large or too small (#11782). Re-frame from the now-visible
+      // SVG, where getBBox() reflects the real content.
+      const rendered = element.querySelector("svg");
+      if (rendered instanceof SVGSVGElement) {
+        const box = rendered.getBBox();
+        if (box.width > 0 && box.height > 0) {
+          const padding = 8;
+          const frameWidth = box.width + padding * 2;
+          rendered.setAttribute(
+            "viewBox",
+            `${box.x - padding} ${box.y - padding} ${frameWidth} ${box.height + padding * 2}`
+          );
+          rendered.style.width = "100%";
+          rendered.style.maxWidth = `${frameWidth}px`;
+        }
+      }
+
+      // Cache the corrected SVG so we won't need to calculate it again this session
+      if (text) {
+        Cache.set(cacheKey, element.innerHTML);
+      }
     } catch (error) {
       const isEmpty = block.node.textContent.trim().length === 0;
 
@@ -119,24 +263,13 @@ class MermaidRenderer {
         element.innerText = "Empty diagram";
         element.classList.add("empty");
       } else {
-        element.innerText = error;
+        element.innerText = errToString(error);
         element.classList.add("parse-error");
       }
     } finally {
       renderElement.remove();
     }
   };
-
-  get render(): RendererFunc {
-    if (this._rendererFunc) {
-      return this._rendererFunc;
-    }
-    this._rendererFunc = debounce<RendererFunc>(this.renderImmediately, 250);
-    return this.renderImmediately;
-  }
-
-  private currentTextContent = "";
-  private _rendererFunc?: RendererFunc;
 }
 
 function overlap(
@@ -173,19 +306,22 @@ function findBestOverlapDecoration(
 
 function getNewState({
   doc,
-  name,
   pluginState,
+  editor,
+  autoEditEmpty = false,
 }: {
   doc: Node;
-  name: string;
   pluginState: MermaidState;
+  editor: Editor;
+  autoEditEmpty?: boolean;
 }): MermaidState {
   const decorations: Decoration[] = [];
+  let newEditingId: string | undefined;
 
-  // Find all blocks that represent Mermaid diagrams
-  const blocks = findBlockNodes(doc).filter(
-    (item) =>
-      item.node.type.name === name && item.node.attrs.language === "mermaidjs"
+  // Find all blocks that represent Mermaid diagrams (supports both "mermaid" and "mermaidjs"),
+  // descending into containers so diagrams inside toggle blocks are also discovered.
+  const blocks = findBlockNodes(doc, true).filter((item) =>
+    isMermaid(item.node)
   );
 
   blocks.forEach((block) => {
@@ -200,8 +336,18 @@ function getNewState({
       block
     );
 
+    const isNewBlock = !bestDecoration;
     const renderer: MermaidRenderer =
-      bestDecoration?.spec?.renderer ?? new MermaidRenderer();
+      bestDecoration?.spec?.renderer ?? new MermaidRenderer(editor);
+
+    // Auto-enter edit mode for newly created empty mermaid diagrams
+    if (
+      autoEditEmpty &&
+      isNewBlock &&
+      block.node.textContent.trim().length === 0
+    ) {
+      newEditingId = renderer.diagramId;
+    }
 
     const diagramDecoration = Decoration.widget(
       block.pos + block.node.nodeSize,
@@ -231,20 +377,23 @@ function getNewState({
   });
 
   return {
+    ...pluginState,
+    ...(newEditingId !== undefined ? { editingId: newEditingId } : {}),
     decorationSet: DecorationSet.create(doc, decorations),
-    isDark: pluginState.isDark,
   };
 }
 
 export default function Mermaid({
-  name,
   isDark,
+  editor,
 }: {
-  name: string;
   isDark: boolean;
+  editor: Editor;
 }) {
+  const { onClickLink } = editor.props;
+
   return new Plugin({
-    key: new PluginKey("mermaid"),
+    key: pluginKey,
     state: {
       init: (_, { doc }) => {
         const pluginState: MermaidState = {
@@ -253,8 +402,8 @@ export default function Mermaid({
         };
         return getNewState({
           doc,
-          name,
           pluginState,
+          editor,
         });
       },
       apply: (
@@ -263,19 +412,57 @@ export default function Mermaid({
         oldState,
         state
       ) => {
-        const nodeName = state.selection.$head.parent.type.name;
-        const previousNodeName = oldState.selection.$head.parent.type.name;
-        const codeBlockChanged =
-          transaction.docChanged && [nodeName, previousNodeName].includes(name);
         const themeMeta = transaction.getMeta("theme");
-        const mermaidMeta = transaction.getMeta("mermaid");
+        const mermaidMeta = transaction.getMeta(pluginKey);
         const themeToggled = themeMeta?.isDark !== undefined;
 
-        if (themeToggled) {
-          pluginState.isDark = themeMeta.isDark;
-        }
+        const nextPluginState = {
+          ...pluginState,
+          isDark: themeToggled ? themeMeta.isDark : pluginState.isDark,
+          editingId:
+            mermaidMeta && "editingId" in mermaidMeta
+              ? mermaidMeta.editingId
+              : pluginState.editingId,
+          decorationSet: mapDecorations(pluginState.decorationSet, transaction),
+        };
 
         if (
+          transaction.selectionSet &&
+          nextPluginState.editingId &&
+          !mermaidMeta
+        ) {
+          const codeBlock = findParentNode(isCode)(state.selection);
+          let isEditing = codeBlock && isMermaid(codeBlock.node);
+
+          if (isEditing && codeBlock && !transaction.docChanged) {
+            const decorations = nextPluginState.decorationSet.find(
+              codeBlock.pos,
+              codeBlock.pos + codeBlock.node.nodeSize
+            );
+            const nodeDecoration = decorations.find(
+              (d) => d.spec.diagramId && d.from === codeBlock.pos
+            );
+            if (nodeDecoration?.spec.diagramId !== nextPluginState.editingId) {
+              isEditing = false;
+            }
+          }
+
+          if (!isEditing) {
+            nextPluginState.editingId = undefined;
+          }
+        }
+
+        const node = state.selection.$head.parent;
+        const previousNode = oldState.selection.$head.parent;
+        const codeBlockChanged =
+          transaction.docChanged &&
+          (isMermaid(node) || isMermaid(previousNode));
+
+        // @ts-expect-error accessing private field.
+        const isPaste = transaction.meta?.paste;
+
+        if (
+          isPaste ||
           mermaidMeta ||
           themeToggled ||
           codeBlockChanged ||
@@ -283,108 +470,155 @@ export default function Mermaid({
         ) {
           return getNewState({
             doc: transaction.doc,
-            name,
-            pluginState,
+            pluginState: nextPluginState,
+            editor,
+            autoEditEmpty:
+              codeBlockChanged &&
+              transaction.docChanged &&
+              !isPaste &&
+              !isRemoteTransaction(transaction),
           });
         }
 
-        return {
-          decorationSet: pluginState.decorationSet.map(
-            transaction.mapping,
-            transaction.doc
-          ),
-          isDark: pluginState.isDark,
-        };
+        return nextPluginState;
       },
     },
+    appendTransaction(_transactions, _oldState, newState) {
+      const { selection } = newState;
+      if (selection instanceof NodeSelection) {
+        return null;
+      }
+
+      const codeBlock = findParentNode(isCode)(selection);
+      if (!codeBlock || !isMermaid(codeBlock.node)) {
+        return null;
+      }
+
+      const mermaidState = pluginKey.getState(newState) as MermaidState;
+      const decorations = mermaidState?.decorationSet.find(
+        codeBlock.pos,
+        codeBlock.pos + codeBlock.node.nodeSize
+      );
+      const nodeDecoration = decorations?.find(
+        (d) => d.spec.diagramId && d.from === codeBlock.pos
+      );
+
+      if (
+        nodeDecoration?.spec.diagramId &&
+        mermaidState?.editingId === nodeDecoration.spec.diagramId
+      ) {
+        return null;
+      }
+
+      return newState.tr.setSelection(
+        NodeSelection.create(newState.doc, codeBlock.pos)
+      );
+    },
     view: (view) => {
-      view.dispatch(view.state.tr.setMeta("mermaid", { loaded: true }));
+      view.dispatch(view.state.tr.setMeta(pluginKey, { loaded: true }));
       return {};
     },
     props: {
       decorations(state) {
         return this.getState(state)?.decorationSet;
       },
+      handleKeyDown(view, event) {
+        if (event.key === "Enter" && event.metaKey && !editor.props.readOnly) {
+          const { selection } = view.state;
+          const isNodeSel = selection instanceof NodeSelection;
+          const isMermaidNode =
+            isNodeSel && isMermaid((selection as NodeSelection).node);
+          if (isNodeSel && isMermaidNode) {
+            editor.commands.edit_mermaid();
+            return true;
+          }
+        }
+
+        if (event.key === "Escape") {
+          const mermaidState = pluginKey.getState(view.state) as MermaidState;
+          const codeBlock = findParentNode(isCode)(view.state.selection);
+
+          if (mermaidState?.editingId) {
+            if (codeBlock && isMermaid(codeBlock.node)) {
+              editor.commands.edit_mermaid();
+              return true;
+            }
+          }
+        }
+        return false;
+      },
       handleDOMEvents: {
+        click(_view, event: MouseEvent) {
+          const target = event.target as HTMLElement;
+          const anchor = target?.closest("a");
+
+          if (anchor instanceof SVGAElement) {
+            event.stopPropagation();
+            event.preventDefault();
+            return false;
+          }
+
+          return true;
+        },
         mousedown(view, event) {
           const target = event.target as HTMLElement;
           const diagram = target?.closest(".mermaid-diagram-wrapper");
-          const codeBlock = diagram?.previousElementSibling;
+          if (!diagram) {
+            return false;
+          }
 
+          const codeBlock = diagram.previousElementSibling;
           if (!codeBlock) {
             return false;
           }
 
           const pos = view.posAtDOM(codeBlock, 0);
-          if (!pos) {
+          const $pos = view.state.doc.resolve(pos);
+          const nodePos = $pos.before();
+          const node = view.state.doc.nodeAt(nodePos);
+
+          const isSelected =
+            view.state.selection instanceof NodeSelection &&
+            view.state.selection.from === nodePos;
+
+          event.preventDefault();
+
+          if (isSelected || editor.props.readOnly) {
+            // Already selected or read-only, open lightbox
+            if (node && node.textContent.trim().length > 0) {
+              editor.updateActiveLightboxImage(
+                LightboxImageFactory.createLightboxImage(view, nodePos)
+              );
+            }
+          } else {
+            // First click, select the node
+            view.dispatch(
+              view.state.tr
+                .setSelection(NodeSelection.create(view.state.doc, nodePos))
+                .scrollIntoView()
+            );
+          }
+          return true;
+        },
+        mouseup(view, event) {
+          const target = event.target as HTMLElement;
+          const diagram = target?.closest(".mermaid-diagram-wrapper");
+          if (!diagram) {
             return false;
           }
 
-          // select node
-          if (diagram && event.detail === 1) {
-            view.dispatch(
-              view.state.tr
-                .setSelection(TextSelection.near(view.state.doc.resolve(pos)))
-                .scrollIntoView()
-            );
-            return true;
-          }
+          const anchor = target?.closest("a");
+          if (anchor instanceof SVGAElement) {
+            const href = anchor.getAttribute("xlink:href");
 
-          return false;
-        },
-        keydown: (view, event) => {
-          switch (event.key) {
-            case "ArrowDown": {
-              const { selection } = view.state;
-              const $pos = view.state.doc.resolve(
-                Math.min(selection.from + 1, view.state.doc.nodeSize)
-              );
-              const nextBlock = $pos.nodeAfter;
-
-              if (
-                nextBlock &&
-                isCode(nextBlock) &&
-                nextBlock.attrs.language === "mermaidjs"
-              ) {
-                view.dispatch(
-                  view.state.tr
-                    .setSelection(
-                      TextSelection.near(
-                        view.state.doc.resolve(selection.to + 1)
-                      )
-                    )
-                    .scrollIntoView()
-                );
+            try {
+              if (onClickLink && href) {
+                event.stopPropagation();
                 event.preventDefault();
-                return true;
+                onClickLink(sanitizeUrl(href) ?? "");
               }
-              return false;
-            }
-            case "ArrowUp": {
-              const { selection } = view.state;
-              const $pos = view.state.doc.resolve(
-                Math.max(0, selection.from - 1)
-              );
-              const prevBlock = $pos.nodeBefore;
-
-              if (
-                prevBlock &&
-                isCode(prevBlock) &&
-                prevBlock.attrs.language === "mermaidjs"
-              ) {
-                view.dispatch(
-                  view.state.tr
-                    .setSelection(
-                      TextSelection.near(
-                        view.state.doc.resolve(selection.from - 2)
-                      )
-                    )
-                    .scrollIntoView()
-                );
-                event.preventDefault();
-                return true;
-              }
-              return false;
+            } catch (_err) {
+              toast.error(t("Sorry, that type of link is not supported"));
             }
           }
 

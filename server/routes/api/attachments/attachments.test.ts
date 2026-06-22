@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { AttachmentPreset, CollectionPermission } from "@shared/types";
 import { UserMembership } from "@server/models";
 import Attachment from "@server/models/Attachment";
@@ -11,9 +12,113 @@ import {
 } from "@server/test/factories";
 import { getTestServer } from "@server/test/support";
 
-jest.mock("@server/storage/files");
+vi.mock("@server/storage/files");
 
 const server = getTestServer();
+
+describe("#attachments.list", () => {
+  it("should return attachments for user", async () => {
+    const user = await buildUser();
+    const document = await buildDocument({
+      userId: user.id,
+      teamId: user.teamId,
+    });
+    const attachment = await buildAttachment({
+      teamId: user.teamId,
+      userId: user.id,
+      documentId: document.id,
+    });
+    const attachment2 = await buildAttachment({
+      teamId: user.teamId,
+      userId: user.id,
+    });
+
+    const res = await server.post("/api/attachments.list", user);
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.pagination.total).toEqual(2);
+    expect(body.data.length).toEqual(2);
+    expect(body.data[0].id).toEqual(attachment.id);
+    expect(body.data[1].id).toEqual(attachment2.id);
+  });
+
+  it("should allow filtering by userId when user is an admin", async () => {
+    const admin = await buildAdmin();
+    const user = await buildUser({ teamId: admin.teamId });
+    // Attachments for user
+    const attachment1 = await buildAttachment({
+      teamId: admin.teamId,
+      userId: user.id,
+    });
+    // Attachment for admin
+    await buildAttachment({
+      teamId: admin.teamId,
+      userId: admin.id,
+    });
+
+    const res = await server.post("/api/attachments.list", admin, {
+      body: {
+        userId: user.id,
+      },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data.length).toEqual(1);
+    expect(body.data[0].id).toEqual(attachment1.id);
+  });
+
+  it("should filter by documentId", async () => {
+    const user = await buildUser();
+    const document = await buildDocument({
+      userId: user.id,
+      teamId: user.teamId,
+    });
+    const attachment = await buildAttachment({
+      teamId: user.teamId,
+      userId: user.id,
+      documentId: document.id,
+    });
+    await buildAttachment({
+      teamId: user.teamId,
+      userId: user.id,
+    });
+
+    const res = await server.post("/api/attachments.list", user, {
+      body: {
+        documentId: document.id,
+      },
+    });
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data.length).toEqual(1);
+    expect(body.data[0].id).toEqual(attachment.id);
+  });
+
+  it("should not return attachments created by other users", async () => {
+    const user = await buildUser();
+    const anotherUser = await buildUser({
+      teamId: user.teamId,
+    });
+    await buildAttachment({
+      teamId: user.teamId,
+      userId: anotherUser.id,
+    });
+
+    const res = await server.post("/api/attachments.list", user);
+    const body = await res.json();
+
+    expect(res.status).toEqual(200);
+    expect(body.data.length).toEqual(0);
+  });
+
+  it("should require authentication", async () => {
+    const res = await server.post("/api/attachments.list");
+    expect(res.status).toEqual(401);
+  });
+});
 
 describe("#attachments.create", () => {
   it("should require authentication", async () => {
@@ -24,13 +129,12 @@ describe("#attachments.create", () => {
   describe("member", () => {
     it("should allow upload using avatar preset", async () => {
       const user = await buildUser();
-      const res = await server.post("/api/attachments.create", {
+      const res = await server.post("/api/attachments.create", user, {
         body: {
           name: "test.png",
           contentType: "image/png",
           size: 1000,
           preset: AttachmentPreset.Avatar,
-          token: user.getJwtToken(),
         },
       });
       expect(res.status).toEqual(200);
@@ -44,16 +148,18 @@ describe("#attachments.create", () => {
 
     it("should allow attachment creation for documents", async () => {
       const user = await buildUser();
-      const document = await buildDocument({ teamId: user.teamId });
+      const document = await buildDocument({
+        teamId: user.teamId,
+        userId: user.id,
+      });
 
-      const res = await server.post("/api/attachments.create", {
+      const res = await server.post("/api/attachments.create", user, {
         body: {
           name: "test.png",
           contentType: "image/png",
           size: 1000,
           documentId: document.id,
           preset: AttachmentPreset.DocumentAttachment,
-          token: user.getJwtToken(),
         },
       });
       expect(res.status).toEqual(200);
@@ -61,13 +167,12 @@ describe("#attachments.create", () => {
 
     it("should create expiring attachment using import preset", async () => {
       const user = await buildUser();
-      const res = await server.post("/api/attachments.create", {
+      const res = await server.post("/api/attachments.create", user, {
         body: {
           name: "test.zip",
           contentType: "application/zip",
           size: 10000,
           preset: AttachmentPreset.WorkspaceImport,
-          token: user.getJwtToken(),
         },
       });
       expect(res.status).toEqual(200);
@@ -83,14 +188,13 @@ describe("#attachments.create", () => {
       const user = await buildUser();
       const document = await buildDocument();
 
-      const res = await server.post("/api/attachments.create", {
+      const res = await server.post("/api/attachments.create", user, {
         body: {
           name: "test.png",
           contentType: "image/png",
           size: 1000,
           documentId: document.id,
           preset: AttachmentPreset.DocumentAttachment,
-          token: user.getJwtToken(),
         },
       });
       expect(res.status).toEqual(403);
@@ -98,13 +202,38 @@ describe("#attachments.create", () => {
 
     it("should not allow file upload for avatar preset", async () => {
       const user = await buildUser();
-      const res = await server.post("/api/attachments.create", {
+      const res = await server.post("/api/attachments.create", user, {
         body: {
           name: "test.pdf",
           contentType: "application/pdf",
           size: 1000,
           preset: AttachmentPreset.Avatar,
-          token: user.getJwtToken(),
+        },
+      });
+      expect(res.status).toEqual(400);
+    });
+
+    it("should reject negative size", async () => {
+      const user = await buildUser();
+      const res = await server.post("/api/attachments.create", user, {
+        body: {
+          name: "test.png",
+          contentType: "image/png",
+          size: -1,
+          preset: AttachmentPreset.Emoji,
+        },
+      });
+      expect(res.status).toEqual(400);
+    });
+
+    it("should reject non-integer size", async () => {
+      const user = await buildUser();
+      const res = await server.post("/api/attachments.create", user, {
+        body: {
+          name: "test.png",
+          contentType: "image/png",
+          size: 1.5,
+          preset: AttachmentPreset.Emoji,
         },
       });
       expect(res.status).toEqual(400);
@@ -130,14 +259,13 @@ describe("#attachments.create", () => {
         permission: CollectionPermission.ReadWrite,
       });
 
-      const res = await server.post("/api/attachments.create", {
+      const res = await server.post("/api/attachments.create", user, {
         body: {
           name: "test.png",
           contentType: "image/png",
           size: 1000,
           documentId: document.id,
           preset: AttachmentPreset.DocumentAttachment,
-          token: user.getJwtToken(),
         },
       });
       expect(res.status).toEqual(200);
@@ -147,14 +275,13 @@ describe("#attachments.create", () => {
       const user = await buildViewer();
       const document = await buildDocument({ teamId: user.teamId });
 
-      const res = await server.post("/api/attachments.create", {
+      const res = await server.post("/api/attachments.create", user, {
         body: {
           name: "test.png",
           contentType: "image/png",
           size: 1000,
           documentId: document.id,
           preset: AttachmentPreset.DocumentAttachment,
-          token: user.getJwtToken(),
         },
       });
       expect(res.status).toEqual(403);
@@ -162,13 +289,12 @@ describe("#attachments.create", () => {
 
     it("should allow upload using avatar preset", async () => {
       const user = await buildViewer();
-      const res = await server.post("/api/attachments.create", {
+      const res = await server.post("/api/attachments.create", user, {
         body: {
           name: "test.png",
           contentType: "image/png",
           size: 1000,
           preset: AttachmentPreset.Avatar,
-          token: user.getJwtToken(),
         },
       });
       expect(res.status).toEqual(200);
@@ -188,9 +314,8 @@ describe("#attachments.delete", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/attachments.delete", {
+    const res = await server.post("/api/attachments.delete", user, {
       body: {
-        token: user.getJwtToken(),
         id: attachment.id,
       },
     });
@@ -212,9 +337,8 @@ describe("#attachments.delete", () => {
     });
     attachment.documentId = null;
     await attachment.save();
-    const res = await server.post("/api/attachments.delete", {
+    const res = await server.post("/api/attachments.delete", user, {
       body: {
-        token: user.getJwtToken(),
         id: attachment.id,
       },
     });
@@ -235,9 +359,8 @@ describe("#attachments.delete", () => {
     });
     attachment.documentId = null;
     await attachment.save();
-    const res = await server.post("/api/attachments.delete", {
+    const res = await server.post("/api/attachments.delete", user, {
       body: {
-        token: user.getJwtToken(),
         id: attachment.id,
       },
     });
@@ -256,9 +379,8 @@ describe("#attachments.delete", () => {
     const attachment = await buildAttachment();
     attachment.documentId = null;
     await attachment.save();
-    const res = await server.post("/api/attachments.delete", {
+    const res = await server.post("/api/attachments.delete", user, {
       body: {
-        token: user.getJwtToken(),
         id: attachment.id,
       },
     });
@@ -272,9 +394,8 @@ describe("#attachments.delete", () => {
     });
     attachment.documentId = null;
     await attachment.save();
-    const res = await server.post("/api/attachments.delete", {
+    const res = await server.post("/api/attachments.delete", user, {
       body: {
-        token: user.getJwtToken(),
         id: attachment.id,
       },
     });
@@ -297,9 +418,8 @@ describe("#attachments.delete", () => {
       documentId: document.id,
       acl: "private",
     });
-    const res = await server.post("/api/attachments.delete", {
+    const res = await server.post("/api/attachments.delete", user, {
       body: {
-        token: user.getJwtToken(),
         id: attachment.id,
       },
     });
@@ -308,20 +428,14 @@ describe("#attachments.delete", () => {
 });
 
 describe("#attachments.redirect", () => {
-  it("should require authentication", async () => {
-    const res = await server.post("/api/attachments.redirect");
-    expect(res.status).toEqual(401);
-  });
-
   it("should return a redirect for an attachment belonging to a document user has access to", async () => {
     const user = await buildUser();
     const attachment = await buildAttachment({
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/attachments.redirect", {
+    const res = await server.post("/api/attachments.redirect", user, {
       body: {
-        token: user.getJwtToken(),
         id: attachment.id,
       },
       redirect: "manual",
@@ -337,10 +451,8 @@ describe("#attachments.redirect", () => {
     });
     const res = await server.post(
       `/api/attachments.redirect?id=${attachment.id}`,
+      user,
       {
-        body: {
-          token: user.getJwtToken(),
-        },
         redirect: "manual",
       }
     );
@@ -364,9 +476,8 @@ describe("#attachments.redirect", () => {
       teamId: user.teamId,
       userId: user.id,
     });
-    const res = await server.post("/api/attachments.redirect", {
+    const res = await server.post("/api/attachments.redirect", user, {
       body: {
-        token: user.getJwtToken(),
         id: attachment.id,
       },
       redirect: "manual",
@@ -391,14 +502,42 @@ describe("#attachments.redirect", () => {
       userId: user.id,
       documentId: document.id,
     });
-    const res = await server.post("/api/attachments.redirect", {
+    const res = await server.post("/api/attachments.redirect", user, {
       body: {
-        token: user.getJwtToken(),
         id: attachment.id,
       },
       redirect: "manual",
     });
     expect(res.status).toEqual(302);
+  });
+
+  it("should return a redirect for an attachment in a public bucket without authentication", async () => {
+    const attachment = await buildAttachment({
+      key: `public/${randomUUID()}/test.png`,
+      acl: "public-read",
+    });
+    const res = await server.post("/api/attachments.redirect", {
+      body: {
+        id: attachment.id,
+      },
+      redirect: "manual",
+    });
+    expect(res.status).toEqual(302);
+    expect(res.headers.get("location")).toContain(attachment.canonicalUrl);
+  });
+
+  it("should return a redirect for a public-read attachment without authentication (not in public bucket)", async () => {
+    const attachment = await buildAttachment({
+      acl: "public-read",
+    });
+    const res = await server.post("/api/attachments.redirect", {
+      body: {
+        id: attachment.id,
+      },
+      redirect: "manual",
+    });
+    expect(res.status).toEqual(302);
+    expect(res.headers.get("location")).toContain(await attachment.signedUrl);
   });
 
   it("should not return a redirect for a private attachment belonging to a document user does not have access to", async () => {
@@ -417,9 +556,8 @@ describe("#attachments.redirect", () => {
       documentId: document.id,
       acl: "private",
     });
-    const res = await server.post("/api/attachments.redirect", {
+    const res = await server.post("/api/attachments.redirect", user, {
       body: {
-        token: user.getJwtToken(),
         id: attachment.id,
       },
     });
@@ -428,11 +566,7 @@ describe("#attachments.redirect", () => {
 
   it("should fail in absence of id", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/attachments.redirect", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/attachments.redirect", user);
     const body = await res.json();
     expect(res.status).toEqual(400);
     expect(body.message).toEqual("id is required");

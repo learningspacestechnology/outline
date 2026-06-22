@@ -1,7 +1,7 @@
 import * as React from "react";
 import styled, { css } from "styled-components";
 import { sanitizeUrl } from "../../utils/urls";
-import { ComponentProps } from "../types";
+import type { ComponentProps } from "../types";
 import { ResizeLeft, ResizeRight } from "./ResizeHandle";
 import useDragResize from "./hooks/useDragResize";
 
@@ -18,17 +18,21 @@ export default function Video(props: Props) {
   const ref = React.useRef<HTMLDivElement>(null);
   const isResizable = !!onChangeSize;
 
-  const { width, height, setSize, handlePointerDown, dragging } = useDragResize(
-    {
-      width: node.attrs.width ?? naturalWidth,
-      height: node.attrs.height ?? naturalHeight,
-      naturalWidth,
-      naturalHeight,
-      gridSnap: 5,
-      onChangeSize,
-      ref,
-    }
-  );
+  const {
+    width,
+    height,
+    setSize,
+    handlePointerDown,
+    handleDoubleClick,
+    dragging,
+  } = useDragResize({
+    width: node.attrs.width ?? naturalWidth,
+    height: node.attrs.height ?? naturalHeight,
+    naturalWidth,
+    naturalHeight,
+    onChangeSize,
+    ref,
+  });
 
   React.useEffect(() => {
     if (node.attrs.width && node.attrs.width !== width) {
@@ -49,6 +53,7 @@ export default function Video(props: Props) {
     <div contentEditable={false} ref={ref}>
       <VideoWrapper
         className={isSelected ? "ProseMirror-selectednode" : ""}
+        $dragging={!!dragging}
         style={style}
       >
         <StyledVideo
@@ -61,10 +66,12 @@ export default function Video(props: Props) {
           <>
             <ResizeLeft
               onPointerDown={handlePointerDown("left")}
+              onDoubleClick={handleDoubleClick}
               $dragging={!!dragging}
             />
             <ResizeRight
               onPointerDown={handlePointerDown("right")}
+              onDoubleClick={handleDoubleClick}
               $dragging={!!dragging}
             />
           </>
@@ -90,7 +97,7 @@ const StyledVideo = styled.video`
   ${videoStyle}
 `;
 
-const VideoWrapper = styled.div`
+const VideoWrapper = styled.div<{ $dragging: boolean }>`
   line-height: 0;
   position: relative;
   margin-left: auto;
@@ -103,12 +110,12 @@ const VideoWrapper = styled.div`
   overflow: hidden;
 
   transition-property: width, max-height;
-  transition-duration: 150ms;
+  transition-duration: ${(props) => (props.$dragging ? "0ms" : "150ms")};
   transition-timing-function: ease-in-out;
 
   video {
     transition-property: width, max-height;
-    transition-duration: 150ms;
+    transition-duration: ${(props) => (props.$dragging ? "0ms" : "150ms")};
     transition-timing-function: ease-in-out;
   }
 

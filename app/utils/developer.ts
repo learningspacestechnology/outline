@@ -1,6 +1,6 @@
-import flatten from "lodash/flatten";
+import { flatten } from "es-toolkit/compat";
 import stores from "~/stores";
-import { flattenTree } from "./tree";
+import { flattenTree } from "@shared/utils/tree";
 
 /**
  * Delete all databases in the browser.
@@ -8,6 +8,10 @@ import { flattenTree } from "./tree";
  * @returns A promise that resolves when all databases have been deleted.
  */
 export async function deleteAllDatabases() {
+  if (!window.indexedDB) {
+    return;
+  }
+
   if ("databases" in window.indexedDB) {
     const databases = await window.indexedDB.databases();
 

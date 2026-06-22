@@ -1,16 +1,22 @@
 import { observer } from "mobx-react";
 import { NewDocumentIcon } from "outline-icons";
-import * as React from "react";
+import { useState, useCallback } from "react";
 import Dropzone from "react-dropzone";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import styled from "styled-components";
+import { errToString } from "@shared/utils/error";
 import { s } from "@shared/styles";
-import { AttachmentPreset, CollectionPermission } from "@shared/types";
+import {
+  AttachmentPreset,
+  CollectionPermission,
+  FileOperationFormat,
+  IntegrationService,
+} from "@shared/types";
 import { bytesToHumanReadable } from "@shared/utils/files";
 import Button from "~/components/Button";
 import Flex from "~/components/Flex";
-import InputSelectPermission from "~/components/InputSelectPermission";
+import { InputSelectPermission } from "~/components/InputSelectPermission";
 import LoadingIndicator from "~/components/LoadingIndicator";
 import Text from "~/components/Text";
 import useStores from "~/hooks/useStores";
@@ -27,11 +33,13 @@ type Props = {
 
 function DropToImport({ disabled, onSubmit, children, format }: Props) {
   const { t } = useTranslation();
-  const { collections } = useStores();
-  const [file, setFile] = React.useState<File | null>(null);
-  const [isImporting, setImporting] = React.useState(false);
-  const [permission, setPermission] =
-    React.useState<CollectionPermission | null>(CollectionPermission.ReadWrite);
+  const { collections, imports } = useStores();
+  const [file, setFile] = useState<File | null>(null);
+  const [isImporting, setImporting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [permission, setPermission] = useState<CollectionPermission | null>(
+    CollectionPermission.ReadWrite
+  );
 
   const handleFiles = (files: File[]) => {
     if (files.length > 1) {
@@ -46,13 +54,35 @@ function DropToImport({ disabled, onSubmit, children, format }: Props) {
       return;
     }
     setImporting(true);
+    setUploadProgress(0);
 
     try {
       const attachment = await uploadFile(file, {
         name: file.name,
         preset: AttachmentPreset.WorkspaceImport,
+        onProgress: (progress) => setUploadProgress(progress),
       });
-      await collections.import(attachment.id, { format, permission });
+
+      if (format === FileOperationFormat.MarkdownZip) {
+        await imports.create(
+          { service: IntegrationService.Markdown },
+          {
+            attachmentId: attachment.id,
+            permission: permission ?? undefined,
+          }
+        );
+      } else if (format === FileOperationFormat.JSON) {
+        await imports.create(
+          { service: IntegrationService.JSON },
+          {
+            attachmentId: attachment.id,
+            permission: permission ?? undefined,
+          }
+        );
+      } else {
+        await collections.import(attachment.id, { format, permission });
+      }
+
       onSubmit();
       toast.message(file.name, {
         description: t(
@@ -60,13 +90,14 @@ function DropToImport({ disabled, onSubmit, children, format }: Props) {
         ),
       });
     } catch (err) {
-      toast.error(err.message);
+      toast.error(errToString(err));
     } finally {
       setImporting(false);
+      setUploadProgress(0);
     }
   };
 
-  const handleRejection = React.useCallback(() => {
+  const handleRejection = useCallback(() => {
     toast.error(t("File not supported – please upload a valid ZIP file"));
   }, [t]);
 
@@ -117,8 +148,12 @@ function DropToImport({ disabled, onSubmit, children, format }: Props) {
         </Text>
       </div>
       <Flex justify="flex-end">
-        <Button disabled={!file} onClick={handleStartImport}>
-          {t("Start import")}
+        <Button disabled={!file || isImporting} onClick={handleStartImport}>
+          {isImporting
+            ? t("Uploading {{progress}}%", {
+                progress: Math.min(99, Math.floor(uploadProgress * 100)),
+              })
+            : t("Start import")}
         </Button>
       </Flex>
     </Flex>

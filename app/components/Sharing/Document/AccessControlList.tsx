@@ -4,14 +4,14 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 import styled, { useTheme } from "styled-components";
 import Squircle from "@shared/components/Squircle";
-import { Pagination } from "@shared/constants";
 import { s } from "@shared/styles";
 import { CollectionPermission, IconType } from "@shared/types";
 import { determineIconType } from "@shared/utils/icon";
 import type Collection from "~/models/Collection";
 import type Document from "~/models/Document";
-import Share from "~/models/Share";
+import type Share from "~/models/Share";
 import Flex from "~/components/Flex";
+import NudeButton from "~/components/NudeButton";
 import Scrollable from "~/components/Scrollable";
 import Text from "~/components/Text";
 import useCurrentTeam from "~/hooks/useCurrentTeam";
@@ -42,6 +42,8 @@ type Props = {
   onRequestClose: () => void;
   /** Whether the popover is visible. */
   visible: boolean;
+  /** Whether the share data is currently loading. */
+  loading: boolean;
 };
 
 export const AccessControlList = observer(
@@ -52,13 +54,14 @@ export const AccessControlList = observer(
     sharedParent,
     onRequestClose,
     visible,
+    loading,
   }: Props) => {
     const { t } = useTranslation();
     const theme = useTheme();
     const collection = document.collection;
     const usersInCollection = useUsersInCollection(collection);
     const user = useCurrentUser();
-    const { userMemberships, groupMemberships } = useStores();
+    const { groupMemberships } = useStores();
     const collectionSharingDisabled = document.collection?.sharing === false;
     const team = useCurrentTeam();
     const can = usePolicy(document);
@@ -66,143 +69,129 @@ export const AccessControlList = observer(
     const documentId = document.id;
 
     const containerRef = React.useRef<HTMLDivElement | null>(null);
+    const publicAccessRef = React.useRef<HTMLDivElement | null>(null);
+    const publicAccessHeight = publicAccessRef.current?.clientHeight || 0;
     const { maxHeight, calcMaxHeight } = useMaxHeight({
       elementRef: containerRef,
-      maxViewportPercentage: 65,
+      maxViewportPercentage: 45,
       margin: 24,
     });
-
-    const { loading: userMembershipLoading, request: fetchUserMemberships } =
-      useRequest(
-        React.useCallback(
-          () =>
-            userMemberships.fetchDocumentMemberships({
-              id: documentId,
-              limit: Pagination.defaultLimit,
-            }),
-          [userMemberships, documentId]
-        )
-      );
-
-    const { loading: groupMembershipLoading, request: fetchGroupMemberships } =
-      useRequest(
-        React.useCallback(
-          () => groupMemberships.fetchAll({ documentId }),
-          [groupMemberships, documentId]
-        )
-      );
 
     const hasMemberships =
       groupMemberships.inDocument(documentId)?.length > 0 ||
       document.members.length > 0;
-    const showLoading =
-      !hasMemberships && (groupMembershipLoading || userMembershipLoading);
-
-    React.useEffect(() => {
-      void fetchUserMemberships();
-      void fetchGroupMemberships();
-    }, [fetchUserMemberships, fetchGroupMemberships]);
+    const showLoading = !hasMemberships && loading;
 
     React.useEffect(() => {
       calcMaxHeight();
     });
 
     return (
-      <ScrollableContainer
-        ref={containerRef}
-        hiddenScrollbars
-        style={{ maxHeight }}
-      >
-        {showLoading ? (
-          <Placeholder />
-        ) : (
-          <>
-            {collection && canCollection.readDocument ? (
-              <>
-                {collection.permission ? (
-                  <ListItem
-                    image={
-                      <Squircle color={theme.accent} size={AvatarSize.Medium}>
-                        <UserIcon color={theme.accentText} size={16} />
-                      </Squircle>
-                    }
-                    title={t("All members")}
-                    subtitle={t("Everyone in the workspace")}
-                    actions={
-                      <AccessTooltip>
-                        {collection?.permission ===
-                        CollectionPermission.ReadWrite
-                          ? t("Can edit")
-                          : t("Can view")}
-                      </AccessTooltip>
-                    }
-                  />
-                ) : usersInCollection ? (
-                  <ListItem
-                    image={<CollectionSquircle collection={collection} />}
-                    title={collection.name}
-                    subtitle={t("Everyone in the collection")}
-                    actions={<AccessTooltip>{t("Can view")}</AccessTooltip>}
-                  />
-                ) : (
-                  <ListItem
-                    image={<Avatar model={user} />}
-                    title={user.name}
-                    subtitle={t("You have full access")}
-                    actions={<AccessTooltip>{t("Can edit")}</AccessTooltip>}
-                  />
-                )}
+      <Wrapper>
+        <ScrollableContainer
+          ref={containerRef}
+          hiddenScrollbars
+          style={{
+            maxHeight: maxHeight ? maxHeight - publicAccessHeight : undefined,
+          }}
+        >
+          {document.isDraft ? (
+            <>
+              <ListItem
+                image={<Avatar model={document.createdBy} />}
+                title={document.createdBy?.name}
+                actions={
+                  <AccessTooltip content={t("Created the document")}>
+                    {t("Can edit")}
+                  </AccessTooltip>
+                }
+              />
+              {showLoading ? (
+                <Placeholder />
+              ) : (
                 <DocumentMemberList
                   document={document}
                   invitedInSession={invitedInSession}
                 />
-              </>
-            ) : document.isDraft ? (
-              <>
-                <ListItem
-                  image={<Avatar model={document.createdBy} />}
-                  title={document.createdBy?.name}
-                  actions={
-                    <AccessTooltip content={t("Created the document")}>
-                      {t("Can edit")}
-                    </AccessTooltip>
-                  }
-                />
-                <DocumentMemberList
-                  document={document}
-                  invitedInSession={invitedInSession}
-                />
-              </>
-            ) : (
-              <>
-                <DocumentMemberList
-                  document={document}
-                  invitedInSession={invitedInSession}
-                />
+              )}
+            </>
+          ) : collection && canCollection.readDocument ? (
+            <>
+              {collection.permission ? (
                 <ListItem
                   image={
                     <Squircle color={theme.accent} size={AvatarSize.Medium}>
-                      <MoreIcon color={theme.accentText} size={16} />
+                      <UserIcon color={theme.accentText} size={16} />
                     </Squircle>
                   }
-                  title={t("Other people")}
-                  subtitle={t("Other workspace members may have access")}
+                  title={t("All members")}
+                  subtitle={t("Everyone in the workspace")}
                   actions={
-                    <AccessTooltip
-                      content={t(
-                        "This document may be shared with more workspace members through a parent document or collection you do not have access to"
-                      )}
-                    />
+                    <AccessTooltip>
+                      {collection?.permission === CollectionPermission.ReadWrite
+                        ? t("Can edit")
+                        : t("Can view")}
+                    </AccessTooltip>
                   }
                 />
-              </>
-            )}
-          </>
-        )}
+              ) : usersInCollection ? (
+                <ListItem
+                  image={<CollectionSquircle collection={collection} />}
+                  title={collection.name}
+                  subtitle={t("Everyone in the collection")}
+                  actions={<AccessTooltip>{t("Can view")}</AccessTooltip>}
+                />
+              ) : (
+                <ListItem
+                  image={<Avatar model={user} />}
+                  title={user.name}
+                  subtitle={t("You have full access")}
+                  actions={<AccessTooltip>{t("Can edit")}</AccessTooltip>}
+                />
+              )}
+              {showLoading ? (
+                <Placeholder />
+              ) : (
+                <DocumentMemberList
+                  document={document}
+                  invitedInSession={invitedInSession}
+                />
+              )}
+            </>
+          ) : (
+            <>
+              {showLoading ? (
+                <Placeholder />
+              ) : (
+                <DocumentMemberList
+                  document={document}
+                  invitedInSession={invitedInSession}
+                />
+              )}
+              <ListItem
+                image={
+                  <Squircle color={theme.accent} size={AvatarSize.Medium}>
+                    <MoreIcon color={theme.accentText} size={16} />
+                  </Squircle>
+                }
+                title={t("Other people")}
+                subtitle={t("Other workspace members may have access")}
+                actions={
+                  <AccessTooltip
+                    content={t(
+                      "This document may be shared with more workspace members through a parent document or collection you do not have access to"
+                    )}
+                  />
+                }
+              />
+            </>
+          )}
+        </ScrollableContainer>
         {team.sharing && can.share && !collectionSharingDisabled && visible && (
           <Sticky>
             {document.members.length ? <Separator /> : null}
             <PublicAccess
+              ref={publicAccessRef}
               document={document}
               share={share}
               sharedParent={sharedParent}
@@ -210,7 +199,7 @@ export const AccessControlList = observer(
             />
           </Sticky>
         )}
-      </ScrollableContainer>
+      </Wrapper>
     );
   }
 );
@@ -230,7 +219,9 @@ const AccessTooltip = ({
         {children}
       </Text>
       <Tooltip content={content ?? t("Access inherited from collection")}>
-        <QuestionMarkIcon size={18} />
+        <NudeButton size={18}>
+          <QuestionMarkIcon size={18} />
+        </NudeButton>
       </Tooltip>
     </Flex>
   );
@@ -273,10 +264,14 @@ function useUsersInCollection(collection?: Collection) {
     : false;
 }
 
+const Wrapper = styled(Flex)`
+  flex-direction: column;
+`;
+
 const Sticky = styled.div`
   background: ${s("menuBackground")};
   position: sticky;
-  bottom: -12px;
+  bottom: 0;
 `;
 
 const ScrollableContainer = styled(Scrollable)`

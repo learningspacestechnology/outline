@@ -1,14 +1,12 @@
-import * as React from "react";
 import { useTranslation } from "react-i18next";
 import styled from "styled-components";
 import Flex from "@shared/components/Flex";
-import { CollectionPermission, DocumentPermission } from "@shared/types";
+import type { CollectionPermission, DocumentPermission } from "@shared/types";
 import { Inner } from "~/components/Button";
 import ButtonSmall from "~/components/ButtonSmall";
 import Fade from "~/components/Fade";
 import InputMemberPermissionSelect from "~/components/InputMemberPermissionSelect";
-import useActionContext from "~/hooks/useActionContext";
-import { Action, Permission } from "~/types";
+import type { Action, Permission } from "~/types";
 
 export function PermissionAction({
   permission,
@@ -22,7 +20,6 @@ export function PermissionAction({
   onChange: (permission: CollectionPermission | DocumentPermission) => void;
 }) {
   const { t } = useTranslation();
-  const context = useActionContext();
 
   return (
     <Fade timing="150ms" key="invite">
@@ -31,12 +28,8 @@ export function PermissionAction({
           permissions={permissions}
           onChange={onChange}
           value={permission}
-          labelHidden
-          nude
         />
-        <ButtonSmall action={action} context={context}>
-          {t("Add")}
-        </ButtonSmall>
+        <ButtonSmall action={action}>{t("Add")}</ButtonSmall>
       </Flex>
     </Fade>
   );

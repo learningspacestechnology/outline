@@ -1,4 +1,4 @@
-import { Collection, Document, Pin, User } from "@server/models";
+import type { Collection, Document, Pin, User } from "@server/models";
 import {
   buildAdmin,
   buildCollection,
@@ -47,20 +47,15 @@ describe("#pins.create", () => {
   });
 
   it("should fail with status 400 bad request when documentId is not suppled", async () => {
-    const res = await server.post("/api/pins.create", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/pins.create", user);
     const body = await res.json();
     expect(res.status).toEqual(400);
     expect(body.message).toEqual("documentId: required");
   });
 
   it("should fail with status 400 bad request when documentId is invalid", async () => {
-    const res = await server.post("/api/pins.create", {
+    const res = await server.post("/api/pins.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: "foo",
       },
     });
@@ -70,9 +65,8 @@ describe("#pins.create", () => {
   });
 
   it("should fail with status 400 bad request when index is invalid", async () => {
-    const res = await server.post("/api/pins.create", {
+    const res = await server.post("/api/pins.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: "foo1234567",
         index: "😀",
       },
@@ -83,9 +77,8 @@ describe("#pins.create", () => {
   });
 
   it("should fail with status 403 forbidden when user is disallowed to read the document", async () => {
-    const res = await server.post("/api/pins.create", {
+    const res = await server.post("/api/pins.create", anotherUser, {
       body: {
-        token: anotherUser.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -95,9 +88,8 @@ describe("#pins.create", () => {
   });
 
   it("should fail with status 403 forbidden when user is disallowed to update the collection", async () => {
-    const res = await server.post("/api/pins.create", {
+    const res = await server.post("/api/pins.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         collectionId: collection.id,
       },
@@ -113,9 +105,8 @@ describe("#pins.create", () => {
       teamId: admin.teamId,
       collectionId: collection.id,
     });
-    const res = await server.post("/api/pins.create", {
+    const res = await server.post("/api/pins.create", admin, {
       body: {
-        token: admin.getJwtToken(),
         // A draft document cannot be pinned, neither by a member nor by an admin
         documentId: draft.id,
         collectionId: collection.id,
@@ -127,9 +118,8 @@ describe("#pins.create", () => {
   });
 
   it("should fail with status 403 forbidden when user is disallowed to pin the document to home page", async () => {
-    const res = await server.post("/api/pins.create", {
+    const res = await server.post("/api/pins.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -139,9 +129,8 @@ describe("#pins.create", () => {
   });
 
   it("should succeed with status 200 ok when user is allowed to pin", async () => {
-    const res = await server.post("/api/pins.create", {
+    const res = await server.post("/api/pins.create", admin, {
       body: {
-        token: admin.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -153,9 +142,8 @@ describe("#pins.create", () => {
   });
 
   it("should succeed with status 200 ok when valid collectionId is supplied", async () => {
-    const res = await server.post("/api/pins.create", {
+    const res = await server.post("/api/pins.create", admin, {
       body: {
-        token: admin.getJwtToken(),
         documentId: document.id,
         collectionId: collection.id,
       },
@@ -176,16 +164,14 @@ describe("#pins.info", () => {
       teamId: admin.teamId,
     });
 
-    await server.post("/api/pins.create", {
+    await server.post("/api/pins.create", admin, {
       body: {
-        token: admin.getJwtToken(),
         documentId: document.id,
       },
     });
 
-    const res = await server.post("/api/pins.info", {
+    const res = await server.post("/api/pins.info", admin, {
       body: {
-        token: admin.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -204,17 +190,15 @@ describe("#pins.info", () => {
       teamId: user.teamId,
     });
 
-    await server.post("/api/pins.create", {
+    await server.post("/api/pins.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         collectionId: document.collectionId,
       },
     });
 
-    const res = await server.post("/api/pins.info", {
+    const res = await server.post("/api/pins.info", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         collectionId: document.collectionId,
       },
@@ -227,22 +211,21 @@ describe("#pins.info", () => {
     expect(pin.data.collectionId).toEqual(document.collectionId);
   });
 
-  it("should throw 404 if no pin found", async () => {
+  it("should return 204 if no pin for input", async () => {
     const user = await buildUser();
     const document = await buildDocument({
       userId: user.id,
       teamId: user.teamId,
     });
 
-    const res = await server.post("/api/pins.info", {
+    const res = await server.post("/api/pins.info", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
         collectionId: null,
       },
     });
 
-    expect(res.status).toEqual(404);
+    expect(res.status).toEqual(204);
   });
 });
 
@@ -292,28 +275,23 @@ describe("#pins.list", () => {
   });
 
   it("should succeed with status 200 ok returning pinned documents", async () => {
-    const res = await server.post("/api/pins.list", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/pins.list", user);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data).toBeTruthy();
     expect(body.data.pins).toBeTruthy();
     expect(body.data.pins).toHaveLength(2);
-    const pinIds = body.data.pins.map((p: any) => p.id);
+    const pinIds = body.data.pins.map((p: { id: string }) => p.id);
     expect(pinIds).toContain(pins[0].id);
     expect(pinIds).toContain(pins[1].id);
-    const docIds = body.data.documents.map((d: any) => d.id);
+    const docIds = body.data.documents.map((d: { id: string }) => d.id);
     expect(docIds).toContain(docs[0].id);
     expect(docIds).toContain(docs[1].id);
   });
 
   it("should succeed with status 200 ok returning pinned documents filtered by collectionId supplied", async () => {
-    const res = await server.post("/api/pins.list", {
+    const res = await server.post("/api/pins.list", user, {
       body: {
-        token: user.getJwtToken(),
         collectionId: collection.id,
       },
     });
@@ -322,6 +300,77 @@ describe("#pins.list", () => {
     expect(body.data).toBeTruthy();
     expect(body.data.pins).toBeTruthy();
     expect(body.data.pins).toHaveLength(0);
+  });
+
+  it("should fail with status 403 forbidden when user cannot access the collection", async () => {
+    const otherUser = await buildUser();
+    const privateCollection = await buildCollection({
+      teamId: otherUser.teamId,
+      createdById: otherUser.id,
+      permission: null,
+    });
+    const doc = await buildDocument({
+      teamId: otherUser.teamId,
+      collectionId: privateCollection.id,
+    });
+    await buildPin({
+      createdById: otherUser.id,
+      documentId: doc.id,
+      collectionId: privateCollection.id,
+      teamId: otherUser.teamId,
+    });
+
+    // Create a user on the same team but without access to the private collection
+    const teamMember = await buildUser({ teamId: otherUser.teamId });
+
+    const res = await server.post("/api/pins.list", teamMember, {
+      body: {
+        collectionId: privateCollection.id,
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(403);
+    expect(body.message).toEqual("Authorization error");
+  });
+
+  it("should succeed with status 200 ok when user can access the collection", async () => {
+    const collectionWithPins = await buildCollection({
+      teamId: user.teamId,
+      createdById: user.id,
+    });
+    const doc = await buildDocument({
+      teamId: user.teamId,
+      collectionId: collectionWithPins.id,
+    });
+    const pin = await buildPin({
+      createdById: user.id,
+      documentId: doc.id,
+      collectionId: collectionWithPins.id,
+      teamId: user.teamId,
+    });
+
+    const res = await server.post("/api/pins.list", user, {
+      body: {
+        collectionId: collectionWithPins.id,
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.pins).toHaveLength(1);
+    expect(body.data.pins[0].id).toEqual(pin.id);
+    expect(body.data.documents).toHaveLength(1);
+    expect(body.data.documents[0].id).toEqual(doc.id);
+  });
+
+  it("should fail with status 403 forbidden when collection does not exist", async () => {
+    const res = await server.post("/api/pins.list", user, {
+      body: {
+        collectionId: "00000000-0000-0000-0000-000000000000",
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(403);
+    expect(body.message).toEqual("Authorization error");
   });
 });
 
@@ -363,32 +412,30 @@ describe("#pins.update", () => {
   });
 
   it("should fail with status 400 bad request when id is missing", async () => {
-    const res = await server.post("/api/pins.update", {
-      body: {
-        token: admin.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/pins.update", admin);
     const body = await res.json();
     expect(res.status).toEqual(400);
-    expect(body.message).toEqual("id: Required");
+    expect(body.message).toEqual(
+      "id: Invalid input: expected string, received undefined"
+    );
   });
 
   it("should fail with status 400 bad request when index is missing", async () => {
-    const res = await server.post("/api/pins.update", {
+    const res = await server.post("/api/pins.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: pin.id,
       },
     });
     const body = await res.json();
     expect(res.status).toEqual(400);
-    expect(body.message).toEqual("index: Required");
+    expect(body.message).toEqual(
+      "index: Invalid input: expected string, received undefined"
+    );
   });
 
   it("should fail with status 400 bad request when an invalid index is sent", async () => {
-    const res = await server.post("/api/pins.update", {
+    const res = await server.post("/api/pins.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: pin.id,
         index: "😀",
       },
@@ -399,9 +446,8 @@ describe("#pins.update", () => {
   });
 
   it("should fail with status 403 forbidden when user is disallowed to update the pin", async () => {
-    const res = await server.post("/api/pins.update", {
+    const res = await server.post("/api/pins.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: pin.id,
         index: "b",
       },
@@ -412,9 +458,8 @@ describe("#pins.update", () => {
   });
 
   it("should succeed with status 200 ok and when user is allowed to update the pin", async () => {
-    const res = await server.post("/api/pins.update", {
+    const res = await server.post("/api/pins.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: pin.id,
         index: "b",
       },
@@ -449,23 +494,20 @@ describe("#pins.delete", () => {
   });
 
   it("should fail with status 400 bad request when id is missing", async () => {
-    const res = await server.post("/api/pins.delete", {
-      body: {
-        token: admin.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/pins.delete", admin);
     const body = await res.json();
     expect(res.status).toEqual(400);
-    expect(body.message).toEqual("id: Required");
+    expect(body.message).toEqual(
+      "id: Invalid input: expected string, received undefined"
+    );
   });
 
   it("should fail with status 403 forbidden when user is disallowed to delete the pin", async () => {
     const user = await buildUser({
       teamId: admin.teamId,
     });
-    const res = await server.post("/api/pins.delete", {
+    const res = await server.post("/api/pins.delete", user, {
       body: {
-        token: user.getJwtToken(),
         id: pin.id,
       },
     });
@@ -475,9 +517,8 @@ describe("#pins.delete", () => {
   });
 
   it("should succeed with status 200 ok when user is allowed to delete the pin", async () => {
-    const res = await server.post("/api/pins.delete", {
+    const res = await server.post("/api/pins.delete", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: pin.id,
       },
     });

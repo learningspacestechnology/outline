@@ -3,13 +3,7 @@
   "description": "Open source wiki and knowledge base for growing teams",
   "website": "https://www.getoutline.com/",
   "repository": "https://github.com/outline/outline",
-  "keywords": [
-    "wiki",
-    "team",
-    "node",
-    "markdown",
-    "slack"
-  ],
+  "keywords": ["wiki", "team", "node", "markdown", "slack"],
   "success_url": "/",
   "formation": {
     "web": {
@@ -27,7 +21,23 @@
     }
   ],
   "scripts": {
-    "postdeploy": "yarn sequelize db:migrate"
+    "postdeploy": "yarn sequelize db:migrate",
+    "pr-predeploy": "yarn sequelize db:migrate"
+  },
+  "environments": {
+    "review": {
+      "scripts": {
+        "postdeploy": "yarn sequelize db:migrate"
+      },
+      "addons": [
+        {
+          "plan": "heroku-redis:mini"
+        },
+        {
+          "plan": "heroku-postgresql:essential-0"
+        }
+      ]
+    }
   },
   "env": {
     "NODE_ENV": {
@@ -49,8 +59,12 @@
       "required": true
     },
     "URL": {
-      "description": "https://{your app name}.herokuapp.com, or the domain you are binding to",
-      "required": true
+      "description": "https://{your app name}.herokuapp.com, or the domain you are binding to. For review apps, this is auto-generated.",
+      "required": false
+    },
+    "HEROKU_APP_NAME": {
+      "description": "Automatically set by Heroku for review apps",
+      "required": false
     },
     "GOOGLE_CLIENT_ID": {
       "description": "See https://developers.google.com/identity/protocols/OAuth2 to create a new Google OAuth client. You must configure at least one of Slack or Google to control login.",
@@ -198,6 +212,11 @@
     "SMTP_SECURE": {
       "value": "true",
       "description": "Use a secure SMTP connection (optional)",
+      "required": false
+    },
+    "SMTP_DISABLE_STARTTLS": {
+      "value": "false",
+      "description": "Disable STARTTLS even if the server supports it (optional)",
       "required": false
     },
     "SMTP_TLS_CIPHERS": {

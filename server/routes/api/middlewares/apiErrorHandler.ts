@@ -1,4 +1,4 @@
-import { Context, Next } from "koa";
+import type { Context, Next } from "koa";
 import {
   ValidationError as SequelizeValidationError,
   EmptyResultError as SequelizeEmptyResultError,
@@ -18,6 +18,7 @@ export default function apiErrorHandler() {
 
       if (
         !(err instanceof AuthorizationError) &&
+        err instanceof Error &&
         /Authorization error/i.test(err.message)
       ) {
         transformedErr = AuthorizationError();
@@ -34,9 +35,9 @@ export default function apiErrorHandler() {
       }
 
       if (
-        err.code === "ENOENT" ||
+        (err instanceof Error && "code" in err && err.code === "ENOENT") ||
         err instanceof SequelizeEmptyResultError ||
-        /Not found/i.test(err.message)
+        (err instanceof Error && /Not found/i.test(err.message))
       ) {
         transformedErr = NotFoundError();
       }

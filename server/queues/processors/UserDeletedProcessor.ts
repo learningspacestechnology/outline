@@ -1,13 +1,15 @@
 import {
   ApiKey,
   GroupUser,
+  OAuthAuthentication,
   Star,
   Subscription,
   UserAuthentication,
   UserMembership,
+  WebhookSubscription,
 } from "@server/models";
 import { sequelize } from "@server/storage/database";
-import { Event as TEvent, UserEvent } from "@server/types";
+import type { Event as TEvent, UserEvent } from "@server/types";
 import BaseProcessor from "./BaseProcessor";
 
 export default class UserDeletedProcessor extends BaseProcessor {
@@ -46,12 +48,28 @@ export default class UserDeletedProcessor extends BaseProcessor {
         },
         transaction,
       });
+      await OAuthAuthentication.destroy({
+        where: {
+          userId: event.userId,
+        },
+        transaction,
+      });
       await Star.destroy({
         where: {
           userId: event.userId,
         },
         transaction,
       });
+      await WebhookSubscription.update(
+        { enabled: false },
+        {
+          where: {
+            createdById: event.userId,
+            enabled: true,
+          },
+          transaction,
+        }
+      );
     });
   }
 }

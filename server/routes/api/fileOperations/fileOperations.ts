@@ -1,5 +1,5 @@
 import Router from "koa-router";
-import { WhereOptions } from "sequelize";
+import type { WhereOptions } from "sequelize";
 import { UserRole } from "@shared/types";
 import { ValidationError } from "@server/errors";
 import auth from "@server/middlewares/authentication";
@@ -9,7 +9,7 @@ import { FileOperation, Team } from "@server/models";
 import { authorize } from "@server/policies";
 import { presentFileOperation, presentPolicies } from "@server/presenters";
 import FileStorage from "@server/storage/files";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
 
@@ -17,7 +17,7 @@ const router = new Router();
 
 router.post(
   "fileOperations.info",
-  auth({ role: UserRole.Admin }),
+  auth(),
   validate(T.FileOperationsInfoSchema),
   async (ctx: APIContext<T.FileOperationsInfoReq>) => {
     const { id } = ctx.input.body;
@@ -92,13 +92,13 @@ const handleFileOperationsRedirect = async (
 
 router.get(
   "fileOperations.redirect",
-  auth({ role: UserRole.Admin }),
+  auth(),
   validate(T.FileOperationsRedirectSchema),
   handleFileOperationsRedirect
 );
 router.post(
   "fileOperations.redirect",
-  auth({ role: UserRole.Admin }),
+  auth(),
   validate(T.FileOperationsRedirectSchema),
   handleFileOperationsRedirect
 );

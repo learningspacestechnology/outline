@@ -1,30 +1,58 @@
-import { TrashIcon, DownloadIcon, ReplaceIcon } from "outline-icons";
-import { EditorState } from "prosemirror-state";
-import * as React from "react";
-import { MenuItem } from "@shared/editor/types";
-import { Dictionary } from "~/hooks/useDictionary";
+import { t } from "i18next";
+import { TrashIcon, DownloadIcon, ReplaceIcon, PDFIcon } from "outline-icons";
+import { isNodeActive } from "@shared/editor/queries/isNodeActive";
+import { isPDFAttachmentActive } from "@shared/editor/queries/isPDFAttachment";
+import type { MenuItem, SelectionContext } from "@shared/editor/types";
 
-export default function attachmentMenuItems(
-  state: EditorState,
-  dictionary: Dictionary
-): MenuItem[] {
+/**
+ * Returns menu items for the attachment selection toolbar.
+ *
+ * @param ctx - the current selection context.
+ * @returns an array of menu items.
+ */
+export default function attachmentMenuItems(ctx: SelectionContext): MenuItem[] {
+  if (ctx.readOnly) {
+    return [];
+  }
+
+  const { schema, state } = ctx;
+  const isAttachmentWithPreview = isNodeActive(schema.nodes.attachment, {
+    preview: true,
+  });
+
   return [
     {
       name: "replaceAttachment",
-      tooltip: dictionary.replaceAttachment,
+      tooltip: t("Replace file"),
       icon: <ReplaceIcon />,
     },
     {
       name: "deleteAttachment",
-      tooltip: dictionary.deleteAttachment,
+      tooltip: t("Delete file"),
       icon: <TrashIcon />,
+    },
+    {
+      name: "toggleAttachmentPreview",
+      tooltip: t("Show preview"),
+      icon: <PDFIcon />,
+      active: isAttachmentWithPreview,
+      visible: isPDFAttachmentActive(state),
+    },
+    {
+      name: "separator",
+    },
+    {
+      name: "dimensions",
+      tooltip: `${t("Width")} × ${t("Height")}`,
+      visible: isAttachmentWithPreview(state),
+      skipIcon: true,
     },
     {
       name: "separator",
     },
     {
       name: "downloadAttachment",
-      label: dictionary.download,
+      label: t("Download"),
       icon: <DownloadIcon />,
       visible: !!fetch,
     },

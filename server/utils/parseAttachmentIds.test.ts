@@ -1,5 +1,4 @@
-import { expect } from "@jest/globals";
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID } from "node:crypto";
 import env from "@server/env";
 import parseAttachmentIds from "./parseAttachmentIds";
 
@@ -8,7 +7,7 @@ it("should return an empty array with no matches", () => {
 });
 
 it("should not return orphaned UUID's", () => {
-  const uuid = uuidv4();
+  const uuid = randomUUID();
   expect(
     parseAttachmentIds(`some random text with a uuid ${uuid}
 
@@ -17,7 +16,7 @@ it("should not return orphaned UUID's", () => {
 });
 
 it("should parse attachment ID from markdown", () => {
-  const uuid = uuidv4();
+  const uuid = randomUUID();
   const results = parseAttachmentIds(
     `![caption text](/api/attachments.redirect?id=${uuid})`
   );
@@ -26,7 +25,7 @@ it("should parse attachment ID from markdown", () => {
 });
 
 it("should parse attachment ID from markdown with additional query params", () => {
-  const uuid = uuidv4();
+  const uuid = randomUUID();
   const results = parseAttachmentIds(
     `![caption text](/api/attachments.redirect?id=${uuid}&size=2)`
   );
@@ -35,7 +34,7 @@ it("should parse attachment ID from markdown with additional query params", () =
 });
 
 it("should parse attachment ID from markdown with fully qualified url", () => {
-  const uuid = uuidv4();
+  const uuid = randomUUID();
   const results = parseAttachmentIds(
     `![caption text](${env.URL}/api/attachments.redirect?id=${uuid})`
   );
@@ -44,7 +43,7 @@ it("should parse attachment ID from markdown with fully qualified url", () => {
 });
 
 it("should parse attachment ID from markdown with title", () => {
-  const uuid = uuidv4();
+  const uuid = randomUUID();
   const results = parseAttachmentIds(
     `![caption text](/api/attachments.redirect?id=${uuid} "align-left")`
   );
@@ -53,8 +52,8 @@ it("should parse attachment ID from markdown with title", () => {
 });
 
 it("should parse multiple attachment IDs from markdown", () => {
-  const uuid = uuidv4();
-  const uuid2 = uuidv4();
+  const uuid = randomUUID();
+  const uuid2 = randomUUID();
   const results =
     parseAttachmentIds(`![caption text](/api/attachments.redirect?id=${uuid})
 
@@ -67,7 +66,7 @@ some text
 });
 
 it("should parse attachment ID from html", () => {
-  const uuid = uuidv4();
+  const uuid = randomUUID();
   const results = parseAttachmentIds(
     `<img src="/api/attachments.redirect?id=${uuid}" />`
   );
@@ -76,7 +75,7 @@ it("should parse attachment ID from html", () => {
 });
 
 it("should parse attachment ID from html with fully qualified url", () => {
-  const uuid = uuidv4();
+  const uuid = randomUUID();
   const results = parseAttachmentIds(
     `<img src="${env.URL}/api/attachments.redirect?id=${uuid}" />`
   );

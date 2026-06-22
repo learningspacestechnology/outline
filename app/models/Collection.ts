@@ -1,19 +1,18 @@
 import invariant from "invariant";
-import { action, computed, observable, runInAction } from "mobx";
+import { action, comparer, computed, observable, runInAction } from "mobx";
 import {
-  CollectionPermission,
-  FileOperationFormat,
+  type CollectionPermission,
+  type FileOperationFormat,
   type NavigationNode,
   NavigationNodeType,
   type ProsemirrorData,
 } from "@shared/types";
-import { ProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
 import { sortNavigationNodes } from "@shared/utils/collections";
 import type CollectionsStore from "~/stores/CollectionsStore";
-import Document from "~/models/Document";
+import type Document from "~/models/Document";
 import ParanoidModel from "~/models/base/ParanoidModel";
 import { client } from "~/utils/ApiClient";
-import User from "./User";
+import type User from "./User";
 import Field from "./decorators/Field";
 import { AfterChange } from "./decorators/Lifecycle";
 
@@ -68,6 +67,18 @@ export default class Collection extends ParanoidModel {
     direction: "asc" | "desc";
   };
 
+  /** The minimum permission level required to manage templates in this collection. */
+  @Field
+  @observable
+  templateManagement: CollectionPermission;
+
+  /**
+   * Whether commenting is enabled for the collection.
+   */
+  @Field
+  @observable
+  commenting?: boolean | null;
+
   /** The child documents of the collection. */
   @observable
   documents?: NavigationNode[];
@@ -118,13 +129,7 @@ export default class Collection extends ParanoidModel {
    * @returns boolean
    */
   get isPrivate(): boolean {
-    return !this.permission;
-  }
-
-  /** Returns whether the collection description is not empty. */
-  @computed
-  get hasDescription(): boolean {
-    return this.data ? !ProsemirrorHelper.isEmptyData(this.data) : false;
+    return this.permission === null;
   }
 
   @computed
@@ -149,7 +154,7 @@ export default class Collection extends ParanoidModel {
     return this.sort.field === "index";
   }
 
-  @computed
+  @computed({ equals: comparer.structural })
   get sortedDocuments(): NavigationNode[] | undefined {
     if (!this.documents) {
       return undefined;
@@ -160,7 +165,7 @@ export default class Collection extends ParanoidModel {
   /** The initial letter of the collection name as a string. */
   @computed
   get initial() {
-    return (this.name ? this.name[0] : "?").toUpperCase();
+    return (this.name?.charAt(0) ?? "?").toUpperCase();
   }
 
   @computed

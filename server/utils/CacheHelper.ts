@@ -1,7 +1,18 @@
+import { toError } from "@shared/utils/error";
 import { Day } from "@shared/utils/time";
 import Logger from "@server/logging/Logger";
 import Redis from "@server/storage/redis";
 import { MutexLock } from "./MutexLock";
+
+/**
+ * Result type for cache callbacks that need to specify a dynamic expiry.
+ */
+export interface CacheResult<T> {
+  /** The data to cache. */
+  data: T;
+  /** Cache expiry in seconds. If not provided, uses the default expiry passed to getDataOrSet. */
+  expiry?: number;
+}
 
 /**
  * A Helper class for server-side cache management
@@ -15,14 +26,21 @@ export class CacheHelper {
    * If data is not found, it will call the callback to get the data and save it in cache
    * using a distributed lock to prevent multiple writes.
    *
+   * The callback can return either:
+   * - A plain value of type T (uses the default expiry)
+   * - A CacheResult<T> object with { data, expiry } for dynamic expiry
+   *
    * @param key Cache key
    * @param callback Callback to get the data if not found in cache
-   * @param expiry Cache data expiry in seconds
+   * @param expiry Default cache data expiry in seconds
+   * @param lockTimeout Lock timeout in milliseconds
+   * @returns The data from cache or the result of the callback
    */
   public static async getDataOrSet<T>(
     key: string,
-    callback: () => Promise<T | undefined>,
-    expiry?: number
+    callback: () => Promise<T | CacheResult<T> | undefined>,
+    expiry: number,
+    lockTimeout: number = MutexLock.defaultLockTimeout
   ): Promise<T | undefined> {
     let cache = await this.getData<T>(key);
 
@@ -35,12 +53,9 @@ export class CacheHelper {
     const lockKey = `lock:${key}`;
     try {
       try {
-        lock = await MutexLock.lock.acquire(
-          [lockKey],
-          MutexLock.defaultLockTimeout
-        );
+        lock = await MutexLock.acquire(lockKey, lockTimeout);
       } catch (err) {
-        Logger.error(`Could not acquire lock for ${key}`, err);
+        Logger.error(`Could not acquire lock for ${key}`, toError(err));
       }
       cache = await this.getData<T>(key);
       if (cache) {
@@ -48,14 +63,27 @@ export class CacheHelper {
       }
 
       // Get the data from the callback and save it in cache
-      const value = await callback();
-      if (value) {
-        await this.setData<T>(key, value, expiry);
+      const result = await callback();
+      if (result) {
+        // Check if result is a CacheResult with dynamic expiry
+        const isCacheResult =
+          typeof result === "object" &&
+          "data" in result &&
+          Object.keys(result).every((k) => k === "data" || k === "expiry");
+
+        if (isCacheResult) {
+          const { data, expiry: dynamicExpiry } = result as CacheResult<T>;
+          await this.setData<T>(key, data, dynamicExpiry ?? expiry);
+          return data;
+        }
+
+        await this.setData<T>(key, result as T, expiry);
+        return result as T;
       }
-      return value;
+      return undefined;
     } finally {
-      if (lock && lock.expiration > new Date().getTime()) {
-        await lock.release();
+      if (lock) {
+        await MutexLock.release(lock);
       }
     }
   }
@@ -73,7 +101,10 @@ export class CacheHelper {
       }
     } catch (err) {
       // just log it, response can still be obtained using the fetch call
-      Logger.error(`Could not fetch cached response against ${key}`, err);
+      Logger.error(
+        `Could not fetch cached response against ${key}`,
+        toError(err)
+      );
     }
     return;
   }
@@ -95,7 +126,23 @@ export class CacheHelper {
       );
     } catch (err) {
       // just log it, can skip caching and directly return response
-      Logger.error(`Could not cache response against ${key}`, err);
+      Logger.error(`Could not cache response against ${key}`, toError(err));
+    }
+  }
+
+  /**
+   * Removes a single cached entry by key.
+   *
+   * @param key Cache key to remove.
+   */
+  public static async removeData(key: string) {
+    try {
+      await Redis.defaultClient.del(key);
+    } catch (err) {
+      Logger.error(
+        `Could not remove cached entry against ${key}`,
+        toError(err)
+      );
     }
   }
 
@@ -112,17 +159,5 @@ export class CacheHelper {
         await Redis.defaultClient.del(key);
       })
     );
-  }
-
-  // keys
-
-  /**
-   * Gets key against which unfurl response for the given url is stored
-   *
-   * @param teamId The team ID to generate a key for
-   * @param url The url to generate a key for
-   */
-  public static getUnfurlKey(teamId: string, url = "") {
-    return `unfurl:${teamId}:${url}`;
   }
 }

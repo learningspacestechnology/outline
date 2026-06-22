@@ -2,7 +2,7 @@ import {
   useFocusEffect,
   useRovingTabIndex,
 } from "@getoutline/react-roving-tabindex";
-import { LocationDescriptor } from "history";
+import type { LocationDescriptor } from "history";
 import * as React from "react";
 import scrollIntoView from "scroll-into-view-if-needed";
 import styled, { useTheme } from "styled-components";
@@ -33,7 +33,7 @@ export type Props = Omit<React.HTMLAttributes<HTMLAnchorElement>, "title"> & {
   small?: boolean;
   /** Whether to enable keyboard navigation */
   keyboardNavigation?: boolean;
-  ellipsis?: boolean;
+  enableEllipsis?: boolean;
 };
 
 const ListItem = (
@@ -46,7 +46,7 @@ const ListItem = (
     border,
     to,
     keyboardNavigation,
-    ellipsis,
+    enableEllipsis,
     ...rest
   }: Props,
   ref: React.RefObject<HTMLAnchorElement>
@@ -85,7 +85,7 @@ const ListItem = (
         column={!compact}
         $selected={selected}
       >
-        <Heading $small={small} $ellipsis={ellipsis}>
+        <Heading $small={small} $ellipsis={enableEllipsis}>
           {title}
         </Heading>
         {subtitle && (
@@ -203,7 +203,7 @@ const Wrapper = styled.a<{
 `;
 
 const Image = styled(Flex)`
-  padding: 0 8px 0 0;
+  padding-inline-end: 8px;
   max-height: 32px;
   align-items: center;
   user-select: none;
@@ -231,6 +231,7 @@ const Subtitle = styled.p<{ $small?: boolean; $selected?: boolean }>`
   font-size: ${(props) => (props.$small ? 13 : 14)}px;
   color: ${s("textTertiary")};
   margin-top: -2px;
+  overflow-wrap: break-word;
 `;
 
 export const Actions = styled(Flex)<{ $selected?: boolean }>`

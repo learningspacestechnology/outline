@@ -1,5 +1,5 @@
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import env from "../env";
 
 /**
@@ -13,7 +13,7 @@ export function getSSLOptions() {
         path.normalize(`${__dirname}/../../../${name}`),
         "utf8"
       );
-    } catch (err) {
+    } catch (_err) {
       return undefined;
     }
   }
@@ -35,7 +35,7 @@ export function getSSLOptions() {
         safeReadFile("public.pem") ||
         safeReadFile("server/config/certs/public.cert"),
     };
-  } catch (err) {
+  } catch (_err) {
     return {
       key: undefined,
       cert: undefined,

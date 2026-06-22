@@ -1,10 +1,8 @@
 import Router from "koa-router";
-import isEmpty from "lodash/isEmpty";
-import isNil from "lodash/isNil";
-import isNull from "lodash/isNull";
-import isUndefined from "lodash/isUndefined";
-import { WhereOptions, Op } from "sequelize";
-import { NotificationEventType } from "@shared/types";
+import { isEmpty, isNil, isNull, isUndefined } from "es-toolkit/compat";
+import type { WhereOptions } from "sequelize";
+import { Op } from "sequelize";
+import type { NotificationEventType } from "@shared/types";
 import { createContext } from "@server/context";
 import env from "@server/env";
 import { AuthenticationError } from "@server/errors";
@@ -16,7 +14,7 @@ import NotificationSettingsHelper from "@server/models/helpers/NotificationSetti
 import { authorize } from "@server/policies";
 import { presentPolicies } from "@server/presenters";
 import presentNotification from "@server/presenters/notification";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
 import { safeEqual } from "@server/utils/crypto";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
@@ -41,7 +39,7 @@ const handleUnsubscribe = async (
     eventType
   );
 
-  if (unsubscribeToken !== token) {
+  if (!safeEqual(unsubscribeToken, token)) {
     ctx.redirect(`${env.URL}?notice=invalid-auth`);
     return;
   }
@@ -53,7 +51,7 @@ const handleUnsubscribe = async (
   });
 
   user.setNotificationEventType(eventType, false);
-  await user.save();
+  await user.save({ transaction });
   ctx.redirect(`${user.team.url}/settings/notifications?success`);
 };
 
@@ -165,7 +163,7 @@ router.get(
       if (user) {
         await notification.updateWithCtx(
           createContext({
-            ...ctx,
+            ip: ctx.request.ip,
             transaction,
             user,
           }),
@@ -220,9 +218,11 @@ router.post(
   "notifications.update_all",
   auth(),
   validate(T.NotificationsUpdateAllSchema),
+  transaction(),
   async (ctx: APIContext<T.NotificationsUpdateAllReq>) => {
     const { viewedAt, archivedAt } = ctx.input.body;
     const { user } = ctx.state.auth;
+    const { transaction } = ctx.state;
 
     const values: Partial<Notification> = {};
     let where: WhereOptions<Notification> = {
@@ -247,7 +247,7 @@ router.post(
     let total = 0;
     if (!isEmpty(values)) {
       total = await Notification.unscoped().findAllInBatches(
-        { where },
+        { where, transaction, lock: transaction.LOCK.UPDATE },
         async (results) => {
           await Promise.all(
             results.map((notification) =>

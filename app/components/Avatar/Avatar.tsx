@@ -1,7 +1,9 @@
+import { observer } from "mobx-react";
 import * as React from "react";
 import styled from "styled-components";
 import useBoolean from "~/hooks/useBoolean";
 import Initials from "./Initials";
+import Tooltip from "../Tooltip";
 
 export enum AvatarSize {
   Small = 16,
@@ -13,16 +15,24 @@ export enum AvatarSize {
   Upload = 64,
 }
 
+export enum AvatarVariant {
+  Round = "round",
+  Square = "square",
+}
+
 export interface IAvatar {
   avatarUrl: string | null;
   color?: string;
   initial?: string;
+  name?: string;
   id?: string;
 }
 
 type Props = {
   /** The size of the avatar */
   size: AvatarSize;
+  /** The variant of the avatar */
+  variant?: AvatarVariant;
   /** The source of the avatar image, if not passing a model. */
   src?: string;
   /** The avatar model, if not passing a source. */
@@ -35,25 +45,47 @@ type Props = {
   className?: string;
   /** Optional style */
   style?: React.CSSProperties;
+  /** Whether to show a tooltip */
+  showTooltip?: boolean;
 };
 
 function Avatar(props: Props) {
-  const { model, style, ...rest } = props;
+  const {
+    model,
+    style,
+    variant = AvatarVariant.Round,
+    className,
+    showTooltip,
+    ...rest
+  } = props;
   const src = props.src || model?.avatarUrl;
   const [error, handleError] = useBoolean(false);
+  const initial =
+    model?.initial || (model?.name ? model.name[0] : "").toUpperCase();
 
-  return (
-    <Relative style={style}>
+  const content = (
+    <Relative
+      style={style}
+      $variant={variant}
+      $size={props.size}
+      className={className}
+    >
       {src && !error ? (
-        <CircleImg onError={handleError} src={src} {...rest} />
+        <Image onError={handleError} src={src} {...rest} />
       ) : model ? (
         <Initials color={model.color} {...rest}>
-          {model.initial}
+          {initial}
         </Initials>
       ) : (
         <Initials {...rest} />
       )}
     </Relative>
+  );
+
+  return showTooltip ? (
+    <Tooltip content={props.alt || model?.name || ""}>{content}</Tooltip>
+  ) : (
+    content
   );
 }
 
@@ -61,19 +93,21 @@ Avatar.defaultProps = {
   size: AvatarSize.Medium,
 };
 
-const Relative = styled.div`
+const Relative = styled.div<{ $variant: AvatarVariant; $size: AvatarSize }>`
   position: relative;
   user-select: none;
   flex-shrink: 0;
+  border-radius: ${(props) =>
+    props.$variant === AvatarVariant.Round ? "50%" : `${props.$size / 8}px`};
+  overflow: hidden;
+  width: ${(props) => props.$size}px;
+  height: ${(props) => props.$size}px;
 `;
 
-const CircleImg = styled.img<{ size: number }>`
+const Image = styled.img<{ size: number }>`
   display: block;
   width: ${(props) => props.size}px;
   height: ${(props) => props.size}px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  overflow: hidden;
 `;
 
-export default Avatar;
+export default observer(Avatar);

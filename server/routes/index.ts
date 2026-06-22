@@ -1,10 +1,9 @@
-import crypto from "crypto";
-import path from "path";
+import crypto from "node:crypto";
+import path from "node:path";
 import { formatRFC7231 } from "date-fns";
-import Koa, { BaseContext } from "koa";
+import Koa from "koa";
 import Router from "koa-router";
 import send from "koa-send";
-import userAgent, { UserAgentContext } from "koa-useragent";
 import { languages } from "@shared/i18n";
 import { IntegrationType, TeamPreference } from "@shared/types";
 import { parseDomain } from "@shared/utils/domains";
@@ -16,6 +15,7 @@ import { Integration } from "@server/models";
 import { opensearchResponse } from "@server/utils/opensearch";
 import { getTeamFromContext } from "@server/utils/passport";
 import { robotsResponse } from "@server/utils/robots";
+import { isInvalidAppPath } from "@server/utils/url";
 import apexRedirect from "../middlewares/apexRedirect";
 import { renderApp, renderShare } from "./app";
 import { renderEmbed } from "./embeds";
@@ -23,8 +23,6 @@ import errors from "./errors";
 
 const koa = new Koa();
 const router = new Router();
-
-koa.use<BaseContext, UserAgentContext>(userAgent);
 
 // serve public assets
 router.use(["/images/*", "/email/*", "/fonts/*"], async (ctx, next) => {
@@ -41,7 +39,7 @@ router.use(["/images/*", "/email/*", "/fonts/*"], async (ctx, next) => {
         },
       });
     } catch (err) {
-      if (err.status !== 404) {
+      if (!(err instanceof Error && "status" in err && err.status === 404)) {
         throw err;
       }
     }
@@ -55,7 +53,8 @@ router.use(["/images/*", "/email/*", "/fonts/*"], async (ctx, next) => {
 router.use(
   ["/share/:shareId", "/share/:shareId/doc/:documentSlug", "/share/:shareId/*"],
   (ctx) => {
-    ctx.redirect(ctx.path.replace(/^\/share/, "/s"));
+    const redirectPath = ctx.path.replace(/^\/share/, "/s");
+    ctx.redirect(redirectPath + ctx.request.URL.search);
     ctx.status = 301;
   }
 );
@@ -79,7 +78,7 @@ if (env.isProduction) {
         },
       });
     } catch (err) {
-      if (err.status === 404) {
+      if (err instanceof Error && "status" in err && err.status === 404) {
         // Serve a bad request instead of not found if the file doesn't exist
         // This prevents CDN's from caching the response, allowing them to continue
         // serving old file versions
@@ -108,10 +107,72 @@ router.get("/locales/:lng.json", async (ctx) => {
         "ETag",
         crypto.createHash("md5").update(stats.mtime.toISOString()).digest("hex")
       );
+      res.setHeader("Access-Control-Allow-Origin", "*");
     },
     root: path.join(__dirname, "../../shared/i18n/locales"),
   });
 });
+
+router.get(
+  [
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/oauth-authorization-server/mcp",
+  ],
+  async (ctx) => {
+    // Use the configured URL for self-hosted deployments to preserve the port when behind
+    // a reverse proxy that may strip the port from the Host header.
+    const origin = env.isCloudHosted
+      ? ctx.request.URL.origin
+      : new URL(env.URL).origin;
+    const team = await getTeamFromContext(ctx, { includeOAuthState: false });
+    const mcpEnabled = team?.getPreference(TeamPreference.MCP) ?? true;
+
+    ctx.body = {
+      issuer: origin,
+      authorization_endpoint: `${origin}/oauth/authorize`,
+      token_endpoint: `${origin}/oauth/token`,
+      revocation_endpoint: `${origin}/oauth/revoke`,
+      ...(!env.OAUTH_DISABLE_DCR &&
+        mcpEnabled && {
+          registration_endpoint: `${origin}/oauth/register`,
+        }),
+      response_types_supported: ["code"],
+      grant_types_supported: ["authorization_code", "refresh_token"],
+      token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
+      code_challenge_methods_supported: ["S256"],
+      scopes_supported: ["read", "write"],
+    };
+  }
+);
+
+router.get(
+  [
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/mcp",
+  ],
+  async (ctx) => {
+    const team = await getTeamFromContext(ctx, { includeOAuthState: false });
+    const mcpEnabled = team?.getPreference(TeamPreference.MCP) ?? true;
+
+    if (!mcpEnabled) {
+      ctx.status = 404;
+      return;
+    }
+
+    // Use the configured URL for self-hosted deployments to preserve the port when behind
+    // a reverse proxy that may strip the port from the Host header.
+    const origin = env.isCloudHosted
+      ? ctx.request.URL.origin
+      : new URL(env.URL).origin;
+
+    ctx.body = {
+      resource: `${origin}/mcp`,
+      authorization_servers: [origin],
+      scopes_supported: ["read", "write"],
+      bearer_methods_supported: ["header"],
+    };
+  }
+);
 
 router.get("/robots.txt", (ctx) => {
   ctx.body = robotsResponse();
@@ -123,7 +184,13 @@ router.get("/opensearch.xml", (ctx) => {
   ctx.body = opensearchResponse(ctx.request.URL.origin);
 });
 
+router.get("/s/:shareId.:format", shareDomains(), renderShare);
 router.get("/s/:shareId", shareDomains(), renderShare);
+router.get(
+  "/s/:shareId/doc/:documentSlug.:format",
+  shareDomains(),
+  renderShare
+);
 router.get("/s/:shareId/doc/:documentSlug", shareDomains(), renderShare);
 router.get("/s/:shareId/*", shareDomains(), renderShare);
 
@@ -132,17 +199,53 @@ router.get("/embeds/github", renderEmbed);
 router.get("/embeds/dropbox", renderEmbed);
 router.get("/embeds/pinterest", renderEmbed);
 
-// catch all for application
-router.get("*", shareDomains(), async (ctx, next) => {
+router.use(shareDomains());
+
+router.get("/doc/:documentSlug", async (ctx, next) => {
   if (ctx.state?.rootShare) {
+    return renderShare(ctx, next);
+  }
+  return next();
+});
+
+router.get("/sitemap.xml", async (ctx) => {
+  if (ctx.state?.rootShare) {
+    ctx.redirect(`/api/shares.sitemap?id=${ctx.state?.rootShare.id}`);
+  } else {
+    ctx.status = 404;
+  }
+});
+
+// catch all for application
+router.get("*", async (ctx, next) => {
+  if (isInvalidAppPath(ctx.path)) {
+    ctx.status = 404;
+    return;
+  }
+
+  if (ctx.state?.rootShare) {
+    // Only allow root path for root share domains, return 404 for other paths.
+    // Valid paths like /doc/:documentSlug and /sitemap.xml are handled above.
+    if (ctx.path !== "/") {
+      ctx.status = 404;
+      return;
+    }
     return renderShare(ctx, next);
   }
 
   const team = await getTeamFromContext(ctx);
 
   if (env.isCloudHosted) {
+    // Redirect to main domain if no team is found
+    if (!team || team.isSuspended) {
+      if (env.isProduction && ctx.hostname !== parseDomain(env.URL).host) {
+        ctx.redirect(env.URL);
+        return;
+      }
+    }
+
     // Redirect all requests to custom domain if one is set
-    if (team?.domain) {
+    else if (team?.domain) {
       if (team.domain !== ctx.hostname) {
         ctx.redirect(ctx.href.replace(ctx.hostname, team.domain));
         return;
@@ -170,12 +273,16 @@ router.get("*", shareDomains(), async (ctx, next) => {
       })
     : [];
 
+  const publicBranding =
+    team?.getPreference(TeamPreference.PublicBranding) ?? false;
+
   return renderApp(ctx, next, {
+    title: publicBranding && team?.name ? team.name : undefined,
+    description:
+      publicBranding && team?.description ? team.description : undefined,
     analytics,
     shortcutIcon:
-      team?.getPreference(TeamPreference.PublicBranding) && team.avatarUrl
-        ? team.avatarUrl
-        : undefined,
+      publicBranding && team?.avatarUrl ? team.avatarUrl : undefined,
   });
 });
 

@@ -1,29 +1,37 @@
-import { Token } from "markdown-it";
-import {
+import { isMatch } from "es-toolkit/compat";
+import { sanitizeUrl } from "../../utils/urls";
+import type Token from "markdown-it/lib/token.mjs";
+import type {
   NodeSpec,
   Node as ProsemirrorNode,
   NodeType,
   Schema,
 } from "prosemirror-model";
-import {
-  Command,
-  NodeSelection,
-  Plugin,
-  TextSelection,
-} from "prosemirror-state";
-import * as React from "react";
-import { Primitive } from "utility-types";
+import type { Command } from "prosemirror-state";
+import { NodeSelection, Plugin, TextSelection } from "prosemirror-state";
+import type { Primitive } from "utility-types";
 import { v4 as uuidv4 } from "uuid";
 import env from "../../env";
-import { MentionType } from "../../types";
+import type { UnfurlResponse } from "../../types";
+import { MentionType, UnfurlResourceType } from "../../types";
 import {
   MentionCollection,
   MentionDocument,
+  MentionGroup,
+  MentionIssue,
+  MentionProject,
+  MentionPullRequest,
+  MentionDate,
+  MentionURL,
   MentionUser,
 } from "../components/Mentions";
-import { MarkdownSerializerState } from "../lib/markdown/serializer";
+import type { MarkdownSerializerState } from "../lib/markdown/serializer";
+import { transformListToMentions } from "../lib/mention";
+import { findParentNodeClosestToPos } from "../queries/findParentNode";
+import { isInList } from "../queries/isInList";
+import { isList } from "../queries/isList";
 import mentionRule from "../rules/mention";
-import { ComponentProps } from "../types";
+import type { ComponentProps } from "../types";
 import Node from "./Node";
 
 export default class Mention extends Node {
@@ -50,6 +58,12 @@ export default class Mention extends Node {
         id: {
           default: undefined,
         },
+        href: {
+          default: undefined,
+        },
+        unfurl: {
+          default: undefined,
+        },
       },
       inline: true,
       marks: "",
@@ -73,29 +87,50 @@ export default class Mention extends Node {
               actorId: dom.dataset.actorid,
               label: dom.innerText,
               id: dom.id,
+              href: dom.getAttribute("href"),
+              unfurl: dom.dataset.unfurl
+                ? JSON.parse(dom.dataset.unfurl)
+                : undefined,
             };
           },
         },
       ],
       toDOM: (node) => [
-        node.attrs.type === MentionType.User ? "span" : "a",
+        node.attrs.type === MentionType.User ||
+        node.attrs.type === MentionType.Date
+          ? "span"
+          : "a",
         {
-          class: `${node.type.name} use-hover-preview`,
+          // Date mentions are self-contained and have nothing to unfurl, so
+          // they opt out of the hover preview behaviour.
+          class:
+            node.attrs.type === MentionType.Date
+              ? node.type.name
+              : `${node.type.name} use-hover-preview`,
           id: node.attrs.id,
           href:
-            node.attrs.type === MentionType.User
+            node.attrs.type === MentionType.User ||
+            node.attrs.type === MentionType.Date
               ? undefined
               : node.attrs.type === MentionType.Document
-              ? `${env.URL}/doc/${node.attrs.modelId}`
-              : `${env.URL}/collection/${node.attrs.modelId}`,
+                ? `${env.URL}/doc/${node.attrs.modelId}`
+                : node.attrs.type === MentionType.Collection
+                  ? `${env.URL}/collection/${node.attrs.modelId}`
+                  : sanitizeUrl(node.attrs.href),
           "data-type": node.attrs.type,
           "data-id": node.attrs.modelId,
           "data-actorid": node.attrs.actorId,
-          "data-url": `mention://${node.attrs.id}/${node.attrs.type}/${node.attrs.modelId}`,
+          "data-url":
+            node.attrs.type === MentionType.PullRequest ||
+            node.attrs.type === MentionType.Issue ||
+            node.attrs.type === MentionType.Project
+              ? sanitizeUrl(node.attrs.href)
+              : `mention://${node.attrs.id}/${node.attrs.type}/${node.attrs.modelId}`,
+          "data-unfurl": JSON.stringify(node.attrs.unfurl),
         },
         toPlainText(node),
       ],
-      toPlainText,
+      leafText: toPlainText,
     };
   }
 
@@ -103,10 +138,44 @@ export default class Mention extends Node {
     switch (props.node.attrs.type) {
       case MentionType.User:
         return <MentionUser {...props} />;
+      case MentionType.Group:
+        return <MentionGroup {...props} />;
       case MentionType.Document:
         return <MentionDocument {...props} />;
       case MentionType.Collection:
         return <MentionCollection {...props} />;
+      case MentionType.Issue:
+        return (
+          <MentionIssue
+            {...props}
+            onChangeUnfurl={this.handleChangeUnfurl(props)}
+          />
+        );
+      case MentionType.PullRequest:
+        return (
+          <MentionPullRequest
+            {...props}
+            onChangeUnfurl={this.handleChangeUnfurl(props)}
+          />
+        );
+      case MentionType.Project:
+        return (
+          <MentionProject
+            {...props}
+            onChangeUnfurl={this.handleChangeUnfurl(props)}
+          />
+        );
+      case MentionType.URL:
+        return (
+          <MentionURL
+            {...props}
+            onChangeUnfurl={this.handleChangeUnfurl(props)}
+          />
+        );
+      case MentionType.Date:
+        return (
+          <MentionDate {...props} onChangeDate={this.handleChangeDate(props)} />
+        );
       default:
         return null;
     }
@@ -149,29 +218,44 @@ export default class Mention extends Node {
   }
 
   keys(): Record<string, Command> {
+    const NavigableMention = [
+      MentionType.Collection,
+      MentionType.Document,
+      MentionType.Issue,
+      MentionType.PullRequest,
+      MentionType.Project,
+    ];
+
     return {
       Enter: (state) => {
         const { selection } = state;
         if (
           selection instanceof NodeSelection &&
           selection.node.type.name === this.name &&
-          (selection.node.attrs.type === MentionType.Document ||
-            selection.node.attrs.type === MentionType.Collection)
+          NavigableMention.includes(selection.node.attrs.type)
         ) {
-          const { modelId } = selection.node.attrs;
+          const mentionType = selection.node.attrs.type;
 
-          const linkType =
-            selection.node.attrs.type === MentionType.Document
-              ? "doc"
-              : selection.node.attrs.type === MentionType.Collection
-              ? "collection"
-              : undefined;
+          let link: string;
 
-          if (!linkType) {
-            return false;
+          if (
+            mentionType === MentionType.Issue ||
+            mentionType === MentionType.PullRequest ||
+            mentionType === MentionType.Project
+          ) {
+            link = selection.node.attrs.href;
+          } else {
+            const { modelId } = selection.node.attrs;
+
+            const linkType =
+              selection.node.attrs.type === MentionType.Document
+                ? "doc"
+                : "collection";
+
+            link = `/${linkType}/${modelId}`;
           }
 
-          this.editor.props.onClickLink?.(`/${linkType}/${modelId}`);
+          this.editor.props.onClickLink?.(link);
           return true;
         }
         return false;
@@ -180,22 +264,66 @@ export default class Mention extends Node {
   }
 
   commands({ type }: { type: NodeType; schema: Schema }) {
-    return (attrs: Record<string, Primitive>): Command =>
-      (state, dispatch) => {
-        const { selection } = state;
-        const position =
-          selection instanceof TextSelection
-            ? selection.$cursor?.pos
-            : selection.$to.pos;
-        if (position === undefined) {
-          return false;
-        }
+    return {
+      mention:
+        (attrs: Record<string, Primitive>): Command =>
+        (state, dispatch) => {
+          const { selection } = state;
+          const position =
+            selection instanceof TextSelection
+              ? selection.$cursor?.pos
+              : selection.$to.pos;
+          if (position === undefined) {
+            return false;
+          }
 
-        const node = type.create(attrs);
-        const transaction = state.tr.insert(position, node);
-        dispatch?.(transaction);
-        return true;
-      };
+          const node = type.create(attrs);
+          const transaction = state.tr.insert(position, node);
+          dispatch?.(transaction);
+          return true;
+        },
+      mention_list:
+        (attrs: Record<string, Primitive>): Command =>
+        (state, dispatch) => {
+          const { selection } = state;
+          const position =
+            selection instanceof TextSelection
+              ? selection.$cursor?.pos
+              : selection.$to.pos;
+
+          if (position === undefined || !isInList(state)) {
+            return false;
+          }
+
+          const resolvedPos = state.tr.doc.resolve(position);
+          const nodeWithPos = findParentNodeClosestToPos(resolvedPos, (node) =>
+            isList(node, this.editor.schema)
+          );
+
+          if (!nodeWithPos) {
+            return false;
+          }
+
+          const listNode = nodeWithPos.node,
+            from = nodeWithPos.pos,
+            to = from + listNode.nodeSize;
+
+          const listNodeWithMentions = transformListToMentions(
+            listNode,
+            this.editor.schema,
+            attrs
+          );
+
+          const tr = state.tr.deleteRange(from, to);
+          dispatch?.(
+            tr
+              .setSelection(TextSelection.near(tr.doc.resolve(from)))
+              .replaceSelectionWith(listNodeWithMentions)
+          );
+
+          return true;
+        },
+    };
   }
 
   toMarkdown(state: MarkdownSerializerState, node: ProsemirrorNode) {
@@ -204,7 +332,15 @@ export default class Mention extends Node {
     const label = node.attrs.label;
     const id = node.attrs.id;
 
-    state.write(`@[${label}](mention://${id}/${mType}/${mId})`);
+    // Use regular links for document and collection mentions
+    if (mType === MentionType.Document) {
+      state.write(`[${label}](/doc/${mId})`);
+    } else if (mType === MentionType.Collection) {
+      state.write(`[${label}](/collection/${mId})`);
+    } else {
+      // Keep the existing mention:// format for other types (user, group, issue, pull_request, url)
+      state.write(`@[${label}](mention://${id}/${mType}/${mId})`);
+    }
   }
 
   parseMarkdown() {
@@ -218,4 +354,52 @@ export default class Mention extends Node {
       }),
     };
   }
+
+  handleChangeDate =
+    ({ node, getPos }: { node: ProsemirrorNode; getPos: () => number }) =>
+    (modelId: string) => {
+      const { view } = this.editor;
+      const { tr } = view.state;
+      const pos = getPos();
+
+      if (node.attrs.modelId === modelId) {
+        return;
+      }
+
+      const transaction = tr.setNodeMarkup(pos, undefined, {
+        ...node.attrs,
+        modelId,
+        label: modelId,
+      });
+      view.dispatch(transaction);
+    };
+
+  handleChangeUnfurl =
+    ({ node, getPos }: { node: ProsemirrorNode; getPos: () => number }) =>
+    (unfurl: UnfurlResponse[keyof UnfurlResponse]) => {
+      const { view } = this.editor;
+      const { tr } = view.state;
+
+      const label =
+        unfurl.type === UnfurlResourceType.Issue ||
+        unfurl.type === UnfurlResourceType.PR ||
+        unfurl.type === UnfurlResourceType.URL
+          ? unfurl.title
+          : unfurl.type === UnfurlResourceType.Project
+            ? unfurl.name
+            : undefined;
+
+      const overrides: Record<string, unknown> = label ? { label } : {};
+      overrides.unfurl = unfurl;
+
+      const pos = getPos();
+
+      if (!isMatch(node.attrs, overrides)) {
+        const transaction = tr.setNodeMarkup(pos, undefined, {
+          ...node.attrs,
+          ...overrides,
+        });
+        view.dispatch(transaction);
+      }
+    };
 }

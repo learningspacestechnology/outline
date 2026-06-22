@@ -1,15 +1,19 @@
-import * as React from "react";
-import { RouteComponentProps, Switch } from "react-router-dom";
-import DocumentNew from "~/scenes/DocumentNew";
+import { Switch } from "react-router-dom";
 import Error404 from "~/scenes/Errors/Error404";
+import { createLazyComponent as lazy } from "~/components/LazyLoad";
 import Route from "~/components/ProfiledRoute";
 import useSettingsConfig from "~/hooks/useSettingsConfig";
-import lazy from "~/utils/lazyWithRetry";
-import { matchDocumentSlug, settingsPath } from "~/utils/routeHelpers";
+import { settingsPath } from "~/utils/routeHelpers";
+import { observer } from "mobx-react";
 
-const Document = lazy(() => import("~/scenes/Document"));
+const Application = lazy(() => import("~/scenes/Settings/Application"));
+const GroupMembers = lazy(() => import("~/scenes/Settings/GroupMembers"), {
+  exportName: "GroupMembersScene",
+});
+const Template = lazy(() => import("~/scenes/Settings/Template"));
+const TemplateNew = lazy(() => import("~/scenes/Settings/TemplateNew"));
 
-export default function SettingsRoutes() {
+function SettingsRoutes() {
   const configs = useSettingsConfig();
 
   return (
@@ -22,19 +26,30 @@ export default function SettingsRoutes() {
           component={config.component}
         />
       ))}
+      {/* TODO: Refactor these exceptions into config? */}
       <Route
         exact
-        path={`${settingsPath("templates")}/${matchDocumentSlug}`}
-        component={Document}
+        path={settingsPath("groups", ":id", "members")}
+        component={GroupMembers.Component}
       />
       <Route
         exact
-        path={`${settingsPath("templates")}/new`}
-        component={(props: RouteComponentProps) => (
-          <DocumentNew {...props} template />
-        )}
+        path={settingsPath("applications", ":id")}
+        component={Application.Component}
+      />
+      <Route
+        exact
+        path={settingsPath("templates", "new")}
+        component={TemplateNew.Component}
+      />
+      <Route
+        exact
+        path={settingsPath("templates", ":id")}
+        component={Template.Component}
       />
       <Route component={Error404} />
     </Switch>
   );
 }
+
+export default observer(SettingsRoutes);

@@ -1,8 +1,6 @@
 import { SunIcon, MoonIcon, BrowserIcon } from "outline-icons";
-import * as React from "react";
-import stores from "~/stores";
 import { Theme } from "~/stores/UiStore";
-import { createAction } from "~/actions";
+import { createAction, createActionWithChildren } from "~/actions";
 import { SettingsSection } from "~/actions/sections";
 
 export const changeToDarkTheme = createAction({
@@ -12,8 +10,8 @@ export const changeToDarkTheme = createAction({
   iconInContextMenu: false,
   keywords: "theme dark night",
   section: SettingsSection,
-  selected: () => stores.ui.theme === "dark",
-  perform: () => stores.ui.setTheme(Theme.Dark),
+  selected: ({ stores }) => stores.ui.theme === "dark",
+  perform: ({ stores }) => stores.ui.setTheme(Theme.Dark),
 });
 
 export const changeToLightTheme = createAction({
@@ -23,8 +21,23 @@ export const changeToLightTheme = createAction({
   iconInContextMenu: false,
   keywords: "theme light day",
   section: SettingsSection,
-  selected: () => stores.ui.theme === "light",
-  perform: () => stores.ui.setTheme(Theme.Light),
+  selected: ({ stores }) => stores.ui.theme === "light",
+  perform: ({ stores }) => stores.ui.setTheme(Theme.Light),
+});
+
+export const toggleTheme = createAction({
+  name: ({ t }) => t("Toggle theme"),
+  analyticsName: "Change theme",
+  iconInContextMenu: false,
+  icon: ({ stores }) =>
+    stores.ui.resolvedTheme === "light" ? <MoonIcon /> : <SunIcon />,
+  keywords: "theme light day",
+  section: SettingsSection,
+  shortcut: ["Meta+Shift+l"],
+  perform: ({ stores }) =>
+    stores.ui.setTheme(
+      stores.ui.resolvedTheme === "light" ? Theme.Dark : Theme.Light
+    ),
 });
 
 export const changeToSystemTheme = createAction({
@@ -34,21 +47,19 @@ export const changeToSystemTheme = createAction({
   iconInContextMenu: false,
   keywords: "theme system default",
   section: SettingsSection,
-  selected: () => stores.ui.theme === "system",
-  perform: () => stores.ui.setTheme(Theme.System),
+  selected: ({ stores }) => stores.ui.theme === "system",
+  perform: ({ stores }) => stores.ui.setTheme(Theme.System),
 });
 
-export const changeTheme = createAction({
-  name: ({ t, isContextMenu }) =>
-    isContextMenu ? t("Appearance") : t("Change theme"),
+export const changeTheme = createActionWithChildren({
+  name: ({ t, isMenu }) => (isMenu ? t("Appearance") : t("Change theme")),
   analyticsName: "Change theme",
   placeholder: ({ t }) => t("Change theme to"),
-  icon: function _Icon() {
-    return stores.ui.resolvedTheme === "light" ? <SunIcon /> : <MoonIcon />;
-  },
+  icon: ({ stores }) =>
+    stores.ui.resolvedTheme === "light" ? <SunIcon /> : <MoonIcon />,
   keywords: "appearance display",
   section: SettingsSection,
   children: [changeToLightTheme, changeToDarkTheme, changeToSystemTheme],
 });
 
-export const rootSettingsActions = [changeTheme];
+export const rootSettingsActions = [changeTheme, toggleTheme];

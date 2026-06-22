@@ -1,26 +1,34 @@
 import commandScore from "command-score";
 import invariant from "invariant";
-import type { ObjectIterateeCustom } from "lodash";
-import deburr from "lodash/deburr";
-import filter from "lodash/filter";
-import find from "lodash/find";
-import flatten from "lodash/flatten";
-import lowerFirst from "lodash/lowerFirst";
-import orderBy from "lodash/orderBy";
+import {
+  deburr,
+  filter,
+  find,
+  flatten,
+  lowerFirst,
+  orderBy,
+} from "es-toolkit/compat";
 import { observable, action, computed, runInAction } from "mobx";
 import pluralize from "pluralize";
 import { Pagination } from "@shared/constants";
 import { type JSONObject } from "@shared/types";
-import RootStore from "~/stores/RootStore";
-import Policy from "~/models/Policy";
-import ArchivableModel from "~/models/base/ArchivableModel";
-import Model from "~/models/base/Model";
+import type RootStore from "~/stores/RootStore";
+import type Policy from "~/models/Policy";
+import type ArchivableModel from "~/models/base/ArchivableModel";
+import type Model from "~/models/base/Model";
 import { LifecycleManager } from "~/models/decorators/Lifecycle";
 import { getInverseRelationsForModelClass } from "~/models/decorators/Relation";
-import { Searchable } from "~/models/interfaces/Searchable";
+import type { Searchable } from "~/models/interfaces/Searchable";
 import type { PaginationParams, PartialExcept, Properties } from "~/types";
 import { client } from "~/utils/ApiClient";
 import { AuthorizationError, NotFoundError } from "~/utils/errors";
+import ParanoidModel from "~/models/base/ParanoidModel";
+
+type ListPredicate<T> =
+  | ((value: T, index: number, collection: ArrayLike<T>) => boolean)
+  | PropertyKey
+  | [PropertyKey, unknown]
+  | Partial<T>;
 
 export enum RPCAction {
   Info = "info",
@@ -42,6 +50,7 @@ export type PaginatedResponse<T> = T[] & {
   };
 };
 
+// oxlint-disable-next-line no-explicit-any
 export type FetchPageParams = PaginationParams & Record<string, any>;
 
 export default abstract class Store<T extends Model> {
@@ -57,6 +66,7 @@ export default abstract class Store<T extends Model> {
   @observable
   isLoaded = false;
 
+  // oxlint-disable-next-line no-explicit-any
   requests: Map<string, Promise<any>> = new Map();
 
   model: typeof Model;
@@ -98,12 +108,14 @@ export default abstract class Store<T extends Model> {
     const normalized = deburr((query ?? "").trim().toLocaleLowerCase());
 
     if (!normalized) {
-      return this.orderedData.slice(0, options?.maxResults);
+      return this.orderedData
+        .filter((item: T & Searchable) => !item.searchSuppressed)
+        .slice(0, options?.maxResults);
     }
 
     return this.orderedData
       .filter((item: T & Searchable) => {
-        if ("deletedAt" in item && item.deletedAt) {
+        if (item.searchSuppressed) {
           return false;
         }
         if ("searchContent" in item) {
@@ -198,7 +210,13 @@ export default abstract class Store<T extends Model> {
     }
 
     LifecycleManager.executeHooks(model.constructor, "beforeRemove", model);
-    this.data.delete(id);
+
+    if (model instanceof ParanoidModel) {
+      model.deletedAt = new Date().toISOString();
+    } else {
+      this.data.delete(id);
+    }
+
     LifecycleManager.executeHooks(model.constructor, "afterRemove", model);
   }
 
@@ -262,7 +280,7 @@ export default abstract class Store<T extends Model> {
    * @param id The ID of the item to get.
    */
   get(id: string): T | undefined {
-    return this.data.get(id);
+    return id ? this.data.get(id) : undefined;
   }
 
   @action
@@ -391,7 +409,7 @@ export default abstract class Store<T extends Model> {
 
   @action
   fetchPage = async (
-    params?: FetchPageParams | undefined
+    params?: FetchPageParams
   ): Promise<PaginatedResponse<T>> => {
     if (!this.actions.includes(RPCAction.List)) {
       throw new Error(`Cannot list ${this.modelName}`);
@@ -420,6 +438,7 @@ export default abstract class Store<T extends Model> {
 
   @action
   fetchAll = async (
+    // oxlint-disable-next-line no-explicit-any
     params?: Record<string, any>
   ): Promise<PaginatedResponse<T>> => {
     const limit = params?.limit ?? Pagination.defaultLimit;
@@ -462,7 +481,7 @@ export default abstract class Store<T extends Model> {
    *
    * @param predicate A function that returns true if the item matches, or an object with the properties to match.
    */
-  find = (predicate: ObjectIterateeCustom<T, boolean>): T | undefined =>
+  find = (predicate: ListPredicate<T>): T | undefined =>
     // @ts-expect-error not sure why T is incompatible
     find(this.orderedData, predicate);
 
@@ -471,7 +490,7 @@ export default abstract class Store<T extends Model> {
    *
    * @param predicate A function that returns true if the item matches, or an object with the properties to match.
    */
-  filter = (predicate: ObjectIterateeCustom<T, boolean>): T[] =>
+  filter = (predicate: ListPredicate<T>): T[] =>
     // @ts-expect-error not sure why T is incompatible
     filter(this.orderedData, predicate);
 }

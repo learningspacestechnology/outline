@@ -1,4 +1,4 @@
-import throttle from "lodash/throttle";
+import { throttle } from "es-toolkit/compat";
 import { observer } from "mobx-react";
 import { MenuIcon } from "outline-icons";
 import { transparentize } from "polished";
@@ -6,7 +6,7 @@ import * as React from "react";
 import { mergeRefs } from "react-merge-refs";
 import styled from "styled-components";
 import breakpoint from "styled-components-breakpoint";
-import { useComponentSize } from "@shared/hooks/useComponentSize";
+import useMeasure from "react-use-measure";
 import { depths, s } from "@shared/styles";
 import { supportsPassiveListener } from "@shared/utils/browser";
 import Button from "~/components/Button";
@@ -38,8 +38,8 @@ function Header(
   const { ui } = useStores();
   const isMobile = useMobile();
   const hasMobileSidebar = hasSidebar && isMobile;
-  const internalRef = React.useRef<HTMLDivElement | null>(null);
-  const breadcrumbsRef = React.useRef<HTMLDivElement | null>(null);
+  const [internalMeasureRef, size] = useMeasure();
+  const [breadcrumbsMeasureRef, breadcrumbsSize] = useMeasure();
   const passThrough = !actions && !left && !title;
 
   const [isScrolled, setScrolled] = React.useState(false);
@@ -62,19 +62,22 @@ function Header(
     });
   }, []);
 
-  const setBreadcrumbRef = React.useCallback((node: HTMLDivElement | null) => {
-    breadcrumbsRef.current = node?.firstElementChild as HTMLDivElement;
-  }, []);
+  const setBreadcrumbRef = React.useCallback(
+    (node: HTMLDivElement | null) => {
+      if (node?.firstElementChild) {
+        breadcrumbsMeasureRef(node.firstElementChild as HTMLDivElement);
+      }
+    },
+    [breadcrumbsMeasureRef]
+  );
 
-  const size = useComponentSize(internalRef);
-  const breadcrumbsSize = useComponentSize(breadcrumbsRef);
   const breadcrumbMakesCompact = breadcrumbsSize.width > size.width / 3;
   const isCompact = size.width < 1000 || breadcrumbMakesCompact;
 
   return (
     <TooltipProvider>
       <Wrapper
-        ref={mergeRefs([ref, internalRef])}
+        ref={mergeRefs([ref, internalMeasureRef])}
         align="center"
         shrink={false}
         className={className}
@@ -85,6 +88,7 @@ function Header(
           <Breadcrumbs ref={setBreadcrumbRef}>
             {hasMobileSidebar && (
               <MobileMenuButton
+                haptic="light"
                 onClick={ui.toggleMobileSidebar}
                 icon={<MenuIcon />}
                 neutral
@@ -112,16 +116,23 @@ function Header(
 const Breadcrumbs = styled("div")`
   flex-grow: 1;
   flex-basis: 0;
+  min-width: 0;
   align-items: center;
-  padding-right: 8px;
+  padding-inline: 0 8px;
   display: flex;
+
+  ${breakpoint("tablet")`
+    min-width: auto;
+  `};
 `;
 
 const Actions = styled(Flex)`
   flex-grow: 1;
   flex-basis: 0;
   min-width: auto;
-  padding-left: 8px;
+  padding-inline: 8px 0;
+  gap: 12px;
+  margin-inline-start: 8px;
 
   ${breakpoint("tablet")`
     position: unset;
@@ -150,7 +161,7 @@ const Wrapper = styled(Flex)<WrapperProps>`
       backdrop-filter: blur(20px);
       `};
 
-  padding: 12px;
+  padding: 12px 16px;
   transform: translate3d(0, 0, 0);
   min-height: ${HEADER_HEIGHT}px;
   justify-content: flex-start;

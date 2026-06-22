@@ -1,6 +1,7 @@
 import { format as formatDate } from "date-fns";
-import * as React from "react";
-import { dateLocale, dateToRelative, locales } from "@shared/utils/date";
+import { useState, useRef, useEffect } from "react";
+import type { locales } from "@shared/utils/date";
+import { dateLocale, dateToRelative } from "@shared/utils/date";
 import useUserLocale from "~/hooks/useUserLocale";
 
 let callbacks: (() => void)[] = [];
@@ -38,16 +39,17 @@ export const useLocaleTime = ({
   const dateFormatLong: Record<string, string> = {
     en_US: "MMMM do, yyyy h:mm a",
     fr_FR: "'Le 'd MMMM yyyy 'à' H:mm",
+    de_DE: "d. MMMM yyyy 'um' H:mm",
   };
   const formatLocaleLong =
     (userLocale ? dateFormatLong[userLocale] : undefined) ??
     "MMMM do, yyyy h:mm a";
   // @ts-expect-error fallback to formatLocaleLong
   const formatLocale = format?.[userLocale] ?? formatLocaleLong;
-  const [_, setMinutesMounted] = React.useState(0); // eslint-disable-line @typescript-eslint/no-unused-vars
-  const callback = React.useRef<() => void>();
+  const [, setMinutesMounted] = useState(0);
+  const callback = useRef<() => void>();
 
-  React.useEffect(() => {
+  useEffect(() => {
     callback.current = eachMinute(() => {
       setMinutesMounted((state) => ++state);
     });

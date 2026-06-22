@@ -5,13 +5,15 @@ import {
 import { observer } from "mobx-react";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
+import { mergeRefs } from "react-merge-refs";
 import { Link } from "react-router-dom";
-import styled, { css } from "styled-components";
+import { DocumentIcon } from "outline-icons";
+import styled, { css, useTheme } from "styled-components";
 import breakpoint from "styled-components-breakpoint";
 import EventBoundary from "@shared/components/EventBoundary";
 import Icon from "@shared/components/Icon";
 import { s, hover } from "@shared/styles";
-import Document from "~/models/Document";
+import type Document from "~/models/Document";
 import Badge from "~/components/Badge";
 import DocumentMeta from "~/components/DocumentMeta";
 import Flex from "~/components/Flex";
@@ -21,10 +23,16 @@ import StarButton, { AnimatedStar } from "~/components/Star";
 import Tooltip from "~/components/Tooltip";
 import useBoolean from "~/hooks/useBoolean";
 import useCurrentUser from "~/hooks/useCurrentUser";
+import useMobile from "~/hooks/useMobile";
 import { useLocationSidebarContext } from "~/hooks/useLocationSidebarContext";
 import DocumentMenu from "~/menus/DocumentMenu";
 import { documentPath } from "~/utils/routeHelpers";
 import { determineSidebarContext } from "./Sidebar/components/SidebarContext";
+import { useDragDocument } from "./Sidebar/hooks/useDragAndDrop";
+import { ActionContextProvider } from "~/hooks/useActionContext";
+import { useDocumentMenuAction } from "~/hooks/useDocumentMenuAction";
+import { ContextMenu } from "./Menu/ContextMenu";
+import useStores from "~/hooks/useStores";
 
 type Props = {
   document: Document;
@@ -33,9 +41,7 @@ type Props = {
   showParentDocuments?: boolean;
   showCollection?: boolean;
   showPublished?: boolean;
-  showPin?: boolean;
   showDraft?: boolean;
-  showTemplate?: boolean;
 };
 
 const SEARCH_RESULT_REGEX = /<b\b[^>]*>(.*?)<\/b>/gi;
@@ -51,8 +57,11 @@ function DocumentListItem(
 ) {
   const { t } = useTranslation();
   const user = useCurrentUser();
+  const theme = useTheme();
+  const { userMemberships, groupMemberships } = useStores();
   const locationSidebarContext = useLocationSidebarContext();
   const [menuOpen, handleMenuOpen, handleMenuClose] = useBoolean();
+  const isMobile = useMobile();
 
   let itemRef: React.Ref<HTMLAnchorElement> =
     React.useRef<HTMLAnchorElement>(null);
@@ -68,9 +77,7 @@ function DocumentListItem(
     showParentDocuments,
     showCollection,
     showPublished,
-    showPin,
     showDraft = true,
-    showTemplate,
     highlight,
     context,
     ...rest
@@ -78,7 +85,12 @@ function DocumentListItem(
   const queryIsInTitle =
     !!highlight &&
     !!document.title.toLowerCase().includes(highlight.toLowerCase());
-  const canStar = !document.isArchived && !document.isTemplate;
+  const canStar = !document.isArchived;
+
+  const isShared = !!(
+    userMemberships.getByDocumentId(document.id) ||
+    groupMemberships.getByDocumentId(document.id)
+  );
 
   const sidebarContext = determineSidebarContext({
     document,
@@ -86,81 +98,128 @@ function DocumentListItem(
     currentContext: locationSidebarContext,
   });
 
-  return (
-    <DocumentLink
-      ref={itemRef}
-      dir={document.dir}
-      role="menuitem"
-      $isStarred={document.isStarred}
-      $menuOpen={menuOpen}
-      to={{
-        pathname: documentPath(document),
-        state: {
-          title: document.titleWithDefault,
-          sidebarContext,
-        },
-      }}
-      {...rest}
-      {...rovingTabIndex}
-    >
-      <Content>
-        <Heading dir={document.dir}>
-          {document.icon && (
-            <>
-              <Icon value={document.icon} color={document.color ?? undefined} />
-              &nbsp;
-            </>
-          )}
-          <Title
-            text={document.titleWithDefault}
-            highlight={highlight}
-            dir={document.dir}
-          />
-          {document.isBadgedNew && document.createdBy?.id !== user.id && (
-            <Badge yellow>{t("New")}</Badge>
-          )}
-          {document.isDraft && showDraft && (
-            <Tooltip content={t("Only visible to you")} placement="top">
-              <Badge>{t("Draft")}</Badge>
-            </Tooltip>
-          )}
-          {canStar && (
-            <StarPositioner>
-              <StarButton document={document} />
-            </StarPositioner>
-          )}
-          {document.isTemplate && showTemplate && (
-            <Badge primary>{t("Template")}</Badge>
-          )}
-        </Heading>
+  const contextMenuAction = useDocumentMenuAction({ documentId: document.id });
 
-        {!queryIsInTitle && (
-          <ResultContext
-            text={context}
-            highlight={highlight ? SEARCH_RESULT_REGEX : undefined}
-            processResult={replaceResultMarks}
-          />
-        )}
-        <DocumentMeta
-          document={document}
-          showCollection={showCollection}
-          showPublished={showPublished}
-          showParentDocuments={showParentDocuments}
-          showLastViewed
-        />
-      </Content>
-      <Actions>
-        <DocumentMenu
-          document={document}
-          showPin={showPin}
-          onOpen={handleMenuOpen}
-          onClose={handleMenuClose}
-          modal={false}
-        />
-      </Actions>
-    </DocumentLink>
+  const [{ isDragging }, draggableRef] = useDragDocument(
+    document.asNavigationNode,
+    0,
+    document,
+    false,
+    false
+  );
+
+  const mergedRef = React.useMemo(
+    () =>
+      mergeRefs<HTMLAnchorElement>([
+        itemRef,
+        draggableRef,
+      ] as React.Ref<HTMLAnchorElement>[]),
+    [itemRef, draggableRef]
+  );
+
+  return (
+    <ActionContextProvider
+      value={{
+        activeModels: [
+          document,
+          ...(!isShared && document.collection ? [document.collection] : []),
+        ],
+      }}
+    >
+      <ContextMenu
+        action={contextMenuAction}
+        ariaLabel={t("Document options")}
+        onOpen={handleMenuOpen}
+        onClose={handleMenuClose}
+      >
+        <DocumentLink
+          ref={mergedRef}
+          dir={document.dir}
+          $isStarred={document.isStarred}
+          $isDragging={isDragging}
+          $menuOpen={menuOpen}
+          to={{
+            pathname: documentPath(document),
+            search: highlight
+              ? `?q=${encodeURIComponent(highlight)}`
+              : undefined,
+            state: {
+              title: document.titleWithDefault,
+              sidebarContext,
+            },
+          }}
+          {...rest}
+          {...rovingTabIndex}
+        >
+          <Flex gap={4} auto>
+            <IconWrapper>
+              {document.icon ? (
+                <Icon
+                  value={document.icon}
+                  color={document.color ?? undefined}
+                  initial={document.initial}
+                />
+              ) : (
+                <DocumentIcon
+                  outline={document.isDraft}
+                  color={theme.textSecondary}
+                />
+              )}
+            </IconWrapper>
+            <Content>
+              <Heading dir={document.dir}>
+                <Title
+                  text={document.titleWithDefault}
+                  highlight={highlight}
+                  dir={document.dir}
+                />
+                {document.isBadgedNew && document.createdBy?.id !== user.id && (
+                  <Badge yellow>{t("New")}</Badge>
+                )}
+                {document.isDraft && showDraft && (
+                  <Tooltip content={t("Only visible to you")} placement="top">
+                    <Badge>{t("Draft")}</Badge>
+                  </Tooltip>
+                )}
+                {canStar && !isMobile && <StarButton document={document} />}
+              </Heading>
+
+              {!queryIsInTitle && (
+                <ResultContext
+                  text={context}
+                  highlight={highlight ? SEARCH_RESULT_REGEX : undefined}
+                  processResult={replaceResultMarks}
+                />
+              )}
+              <DocumentMeta
+                document={document}
+                showCollection={showCollection}
+                showPublished={showPublished}
+                showParentDocuments={showParentDocuments}
+                showLastViewed
+              />
+            </Content>
+          </Flex>
+          <Actions>
+            <DocumentMenu
+              document={document}
+              onOpen={handleMenuOpen}
+              onClose={handleMenuClose}
+            />
+          </Actions>
+        </DocumentLink>
+      </ContextMenu>
+    </ActionContextProvider>
   );
 }
+
+const IconWrapper = styled.div`
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  width: 24px;
+`;
 
 const Content = styled.div`
   flex-grow: 1;
@@ -176,10 +235,9 @@ const Actions = styled(EventBoundary)`
   flex-grow: 0;
   color: ${s("textSecondary")};
 
-  ${NudeButton} {
-    &: ${hover}, &[aria-expanded= "true"] {
-      background: ${s("sidebarControlHoverBackground")};
-    }
+  ${NudeButton}:${hover},
+  ${NudeButton}[aria-expanded= "true"] {
+    background: ${s("sidebarControlHoverBackground")};
   }
 
   ${breakpoint("tablet")`
@@ -189,6 +247,7 @@ const Actions = styled(EventBoundary)`
 
 const DocumentLink = styled(Link)<{
   $isStarred?: boolean;
+  $isDragging?: boolean;
   $menuOpen?: boolean;
 }>`
   display: flex;
@@ -199,6 +258,8 @@ const DocumentLink = styled(Link)<{
   max-height: 50vh;
   width: calc(100vw - 8px);
   cursor: var(--pointer);
+  transition: opacity 250ms ease;
+  opacity: ${(props) => (props.$isDragging ? 0.1 : 1)};
 
   &:focus-visible {
     outline: none;
@@ -250,21 +311,19 @@ const DocumentLink = styled(Link)<{
     `}
 `;
 
-const Heading = styled.h3<{ rtl?: boolean }>`
+const Heading = styled.span<{ rtl?: boolean }>`
   display: flex;
   justify-content: ${(props) => (props.rtl ? "flex-end" : "flex-start")};
   align-items: center;
   margin-top: 0;
-  margin-bottom: 0.25em;
+  margin-bottom: 0.1em;
   white-space: nowrap;
   color: ${s("text")};
   font-family: ${s("fontFamily")};
   font-weight: 500;
-`;
-
-const StarPositioner = styled(Flex)`
-  margin-left: 4px;
-  align-items: center;
+  font-size: 18px;
+  line-height: 1.2;
+  gap: 4px;
 `;
 
 const Title = styled(Highlight)`

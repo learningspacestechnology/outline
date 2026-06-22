@@ -1,16 +1,20 @@
+import * as VisuallyHidden from "@radix-ui/react-visually-hidden";
 import * as React from "react";
 import { mergeRefs } from "react-merge-refs";
-import { VisuallyHidden } from "reakit/VisuallyHidden";
 import styled from "styled-components";
 import breakpoint from "styled-components-breakpoint";
 import { s, ellipsis } from "@shared/styles";
 import Flex from "~/components/Flex";
 import Text from "~/components/Text";
+import Fade from "~/components/Fade";
 import { undraggableOnDesktop } from "~/styles";
 
 export const NativeTextarea = styled.textarea<{
   hasIcon?: boolean;
   hasPrefix?: boolean;
+  $autoSize?: boolean;
+  $minHeight?: string;
+  $maxHeight?: string;
 }>`
   border: 0;
   flex: 1;
@@ -19,6 +23,10 @@ export const NativeTextarea = styled.textarea<{
   outline: none;
   background: none;
   color: ${s("text")};
+
+  ${(props) => props.$autoSize && `field-sizing: content;`}
+  ${(props) => props.$minHeight && `min-height: ${props.$minHeight};`}
+  ${(props) => props.$maxHeight && `max-height: ${props.$maxHeight};`}
 
   &:disabled,
   &::placeholder {
@@ -44,6 +52,10 @@ export const NativeInput = styled.input<{
 
   ${ellipsis()}
   ${undraggableOnDesktop()}
+
+  &[readOnly] {
+    color: ${s("textSecondary")};
+  }
 
   &:disabled,
   &::placeholder {
@@ -83,7 +95,7 @@ export const Wrapper = styled.div<{
 
 const IconWrapper = styled.span`
   position: relative;
-  left: 4px;
+  inset-inline-start: 4px;
   width: 24px;
   height: 24px;
 `;
@@ -91,8 +103,10 @@ const IconWrapper = styled.span`
 export const Outline = styled(Flex)<{
   margin?: string | number;
   hasError?: boolean;
-  focused?: boolean;
+  $focused?: boolean;
+  $round?: boolean;
 }>`
+  position: relative;
   flex: 1;
   margin: ${(props) =>
     props.margin !== undefined ? props.margin : "0 0 16px"};
@@ -102,10 +116,10 @@ export const Outline = styled(Flex)<{
   border-color: ${(props) =>
     props.hasError
       ? props.theme.danger
-      : props.focused
-      ? props.theme.inputBorderFocused
-      : props.theme.inputBorder};
-  border-radius: 4px;
+      : props.$focused
+        ? props.theme.inputBorderFocused
+        : props.theme.inputBorder};
+  border-radius: ${(props) => (props.$round ? "16px" : "4px")};
   font-weight: normal;
   align-items: center;
   overflow: hidden;
@@ -115,28 +129,58 @@ export const Outline = styled(Flex)<{
   user-select: none;
 `;
 
+const CharacterCount = styled.span<{ $warning?: boolean }>`
+  position: absolute;
+  top: 0;
+  inset-inline-end: 0;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-start-start-radius: 0;
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+  border-end-start-radius: 2px;
+  background: ${(props) =>
+    props.$warning ? props.theme.warning : props.theme.inputBorder};
+  color: ${(props) =>
+    props.$warning ? props.theme.white : props.theme.textTertiary};
+  pointer-events: none;
+`;
+
 export const LabelText = styled.div`
   font-weight: 500;
   padding-bottom: 4px;
   display: inline-block;
 `;
 
-export interface Props
-  extends Omit<
-    React.InputHTMLAttributes<HTMLInputElement | HTMLTextAreaElement>,
-    "prefix"
-  > {
-  type?: "text" | "email" | "checkbox" | "search" | "textarea";
+export interface Props extends Omit<
+  React.InputHTMLAttributes<HTMLInputElement | HTMLTextAreaElement>,
+  "prefix"
+> {
+  type?: "text" | "email" | "checkbox" | "search" | "textarea" | "password";
   labelHidden?: boolean;
   label?: string;
   flex?: boolean;
   short?: boolean;
   margin?: string | number;
   error?: string;
+  rows?: number;
   /** Optional component that appears inside the input before the textarea and any icon */
   prefix?: React.ReactNode;
   /** Optional icon that appears inside the input before the textarea */
   icon?: React.ReactNode;
+  /** Show a character count near the maxLength limit. Always shown for textareas, opt-in for other types. */
+  showCharacterCount?: boolean;
+  /** An optional soft limit below maxLength. When the value exceeds this, the character count is shown in a warning color. */
+  warningLimit?: number;
+  /** For textareas, grow the height to fit content. Use with `maxHeight` to cap the growth. */
+  autoSize?: boolean;
+  /** Minimum height of the textarea as a CSS length value (e.g. "3lh", "80px"). */
+  minHeight?: string;
+  /** Maximum height of the textarea as a CSS length value (e.g. "20lh", "400px"). */
+  maxHeight?: string;
+  /** Whether to use a round border-radius (16px) instead of the default (4px). */
+  round?: boolean;
   /** Like autoFocus, but also select any text in the input */
   autoSelect?: boolean;
   /** Callback is triggered with the CMD+Enter keyboard combo */
@@ -153,6 +197,21 @@ function Input(
 ) {
   const internalRef = React.useRef<HTMLInputElement | HTMLTextAreaElement>();
   const [focused, setFocused] = React.useState(false);
+  const [charCount, setCharCount] = React.useState(() => {
+    if (typeof props.value === "string") {
+      return props.value.length;
+    }
+    if (typeof props.defaultValue === "string") {
+      return props.defaultValue.length;
+    }
+    return 0;
+  });
+
+  React.useEffect(() => {
+    if (typeof props.value === "string") {
+      setCharCount(props.value.length);
+    }
+  }, [props.value]);
 
   const handleBlur = (ev: React.SyntheticEvent) => {
     setFocused(false);
@@ -167,6 +226,15 @@ function Input(
 
     if (props.onFocus) {
       props.onFocus(ev);
+    }
+  };
+
+  const handleChange = (
+    ev: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+  ) => {
+    setCharCount(ev.target.value.length);
+    if (props.onChange) {
+      props.onChange(ev);
     }
   };
 
@@ -201,13 +269,30 @@ function Input(
     short,
     flex,
     prefix,
+    round,
     labelHidden,
+    maxLength,
+    showCharacterCount,
+    warningLimit,
+    autoSize,
+    minHeight,
+    maxHeight,
     onFocus,
     onBlur,
+    onChange,
     onRequestSubmit,
     children,
     ...rest
   } = props;
+
+  const showCharCount =
+    (type === "textarea" || showCharacterCount) &&
+    maxLength !== undefined &&
+    (charCount >= maxLength * 0.9 ||
+      (warningLimit !== undefined && charCount >= warningLimit));
+
+  const overWarningLimit =
+    warningLimit !== undefined && charCount > warningLimit;
 
   const wrappedLabel = <LabelText>{label}</LabelText>;
 
@@ -216,11 +301,11 @@ function Input(
       <label>
         {label &&
           (labelHidden ? (
-            <VisuallyHidden>{wrappedLabel}</VisuallyHidden>
+            <VisuallyHidden.Root>{wrappedLabel}</VisuallyHidden.Root>
           ) : (
             wrappedLabel
           ))}
-        <Outline focused={focused} margin={margin}>
+        <Outline $focused={focused} $round={round} margin={margin}>
           {prefix}
           {icon && <IconWrapper>{icon}</IconWrapper>}
           {type === "textarea" ? (
@@ -233,9 +318,14 @@ function Input(
               onFocus={handleFocus}
               hasIcon={!!icon}
               hasPrefix={!!prefix}
+              $autoSize={autoSize}
+              $minHeight={minHeight}
+              $maxHeight={maxHeight}
               {...rest}
-              // set it after "rest" to override "onKeyDown" from prop.
+              // set it after "rest" to override props from spread.
+              maxLength={maxLength}
               onKeyDown={handleKeyDown}
+              onChange={handleChange}
             />
           ) : (
             <NativeInput
@@ -249,9 +339,18 @@ function Input(
               hasPrefix={!!prefix}
               type={type}
               {...rest}
-              // set it after "rest" to override "onKeyDown" from prop.
+              // set it after "rest" to override "onKeyDown" and "onChange" from prop.
+              maxLength={maxLength}
               onKeyDown={handleKeyDown}
+              onChange={handleChange}
             />
+          )}
+          {showCharCount && (
+            <Fade>
+              <CharacterCount $warning={overWarningLimit}>
+                {charCount}/{maxLength}
+              </CharacterCount>
+            </Fade>
           )}
           {children}
         </Outline>

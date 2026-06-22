@@ -1,34 +1,42 @@
 import passport from "@outlinewiki/koa-passport";
 import type { Context } from "koa";
 import Router from "koa-router";
-import { Profile } from "passport";
+import type { Profile } from "passport";
 import { Strategy as SlackStrategy } from "passport-slack-oauth2";
+import { toError } from "@shared/utils/error";
 import { IntegrationService, IntegrationType } from "@shared/types";
-import { parseDomain } from "@shared/utils/domains";
 import accountProvisioner from "@server/commands/accountProvisioner";
 import { ValidationError } from "@server/errors";
+import apexAuthRedirect from "@server/middlewares/apexAuthRedirect";
 import auth from "@server/middlewares/authentication";
 import passportMiddleware from "@server/middlewares/passport";
 import validate from "@server/middlewares/validate";
+import type { User } from "@server/models";
 import {
   IntegrationAuthentication,
   Integration,
-  Team,
-  User,
   Collection,
 } from "@server/models";
 import { authorize } from "@server/policies";
 import { sequelize } from "@server/storage/database";
-import { APIContext, AuthenticationResult } from "@server/types";
+import type { APIContext, AuthenticationResult } from "@server/types";
+import { verifyOAuthStateNonce } from "@server/utils/oauth";
 import {
-  getClientFromContext,
+  getClientFromOAuthState,
   getTeamFromContext,
+  getUserFromOAuthState,
   StateStore,
+  startOAuthFlow,
 } from "@server/utils/passport";
+import { parseEmail } from "@shared/utils/email";
 import env from "../env";
 import * as Slack from "../slack";
 import * as T from "./schema";
-import { SlackUtils } from "plugins/slack/shared/SlackUtils";
+import {
+  SlackUtils,
+  SlackOAuthNonceCookie,
+} from "plugins/slack/shared/SlackUtils";
+import { createContext } from "@server/context";
 
 type SlackProfile = Profile & {
   team: {
@@ -68,7 +76,7 @@ if (env.SLACK_CLIENT_ID && env.SLACK_CLIENT_SECRET) {
       scope: scopes,
     },
     async function (
-      ctx: Context,
+      context: Context,
       accessToken: string,
       refreshToken: string,
       params: { expires_in: number },
@@ -80,20 +88,31 @@ if (env.SLACK_CLIENT_ID && env.SLACK_CLIENT_SECRET) {
       ) => void
     ) {
       try {
-        const team = await getTeamFromContext(ctx);
-        const client = getClientFromContext(ctx);
+        const team = await getTeamFromContext(context);
+        const client = getClientFromOAuthState(context);
+        const user =
+          context.state?.auth?.user ?? (await getUserFromOAuthState(context));
 
-        const result = await accountProvisioner({
-          ip: ctx.ip,
+        const { domain } = parseEmail(profile.user.email);
+
+        const ctx = createContext({
+          ip: context.ip,
+          user,
+          authType: context.state?.auth?.type,
+        });
+        const result = await accountProvisioner(ctx, {
           team: {
             teamId: team?.id,
             name: profile.team.name,
+            domain,
             subdomain: profile.team.domain,
             avatarUrl: profile.team.image_230,
           },
           user: {
             name: profile.user.name,
             email: profile.user.email,
+            // Slack only returns confirmed workspace email addresses.
+            emailVerified: true,
             avatarUrl: profile.user.image_192,
           },
           authenticationProvider: {
@@ -110,7 +129,7 @@ if (env.SLACK_CLIENT_ID && env.SLACK_CLIENT_SECRET) {
         });
         return done(null, result.user, { ...result, client });
       } catch (err) {
-        return done(err, null);
+        return done(toError(err), null);
       }
     }
   );
@@ -119,13 +138,22 @@ if (env.SLACK_CLIENT_ID && env.SLACK_CLIENT_SECRET) {
   strategy.name = providerName;
   passport.use(strategy);
 
-  router.get("slack", passport.authenticate(providerName));
+  router.get("slack", startOAuthFlow, passport.authenticate(providerName));
   router.get("slack.callback", passportMiddleware(providerName));
 
   router.get(
     "slack.post",
     auth({ optional: true }),
     validate(T.SlackPostSchema),
+    apexAuthRedirect<T.SlackPostReq>({
+      getTeamId: (ctx) => SlackUtils.parseState(ctx.input.query.state)?.teamId,
+      getRedirectPath: (ctx, team) =>
+        SlackUtils.connectUrl({
+          baseUrl: team.url,
+          params: ctx.request.querystring,
+        }),
+      getErrorPath: () => SlackUtils.errorUrl("unauthenticated"),
+    }),
     async (ctx: APIContext<T.SlackPostReq>) => {
       const { code, error, state } = ctx.input.query;
       const { user } = ctx.state.auth;
@@ -135,46 +163,23 @@ if (env.SLACK_CLIENT_ID && env.SLACK_CLIENT_SECRET) {
         return;
       }
 
-      let parsedState;
-      try {
-        parsedState = SlackUtils.parseState<{
-          collectionId: string;
-        }>(state);
-      } catch (err) {
+      const parsedState = SlackUtils.parseState(state);
+      if (!parsedState) {
         throw ValidationError("Invalid state");
       }
 
-      const { teamId, collectionId, type } = parsedState;
+      verifyOAuthStateNonce(ctx, SlackOAuthNonceCookie, parsedState.nonce);
 
-      // This code block accounts for the root domain being unable to access authentication for
-      // subdomains. We must forward to the appropriate subdomain to complete the OAuth flow.
-      if (!user) {
-        if (teamId) {
-          try {
-            const team = await Team.findByPk(teamId, {
-              rejectOnEmpty: true,
-            });
-            return parseDomain(ctx.host).teamSubdomain === team.subdomain
-              ? ctx.redirect("/")
-              : ctx.redirectOnClient(
-                  SlackUtils.connectUrl({
-                    baseUrl: team.url,
-                    params: ctx.request.querystring,
-                  })
-                );
-          } catch (err) {
-            return ctx.redirect(SlackUtils.errorUrl("unauthenticated"));
-          }
-        } else {
-          return ctx.redirect(SlackUtils.errorUrl("unauthenticated"));
-        }
-      }
+      const { collectionId, type } = parsedState;
 
       switch (type) {
         case IntegrationType.Post: {
-          const collection = await Collection.scope({
-            method: ["withMembership", user.id],
-          }).findByPk(collectionId);
+          if (!collectionId) {
+            throw ValidationError("collectionId is required");
+          }
+          const collection = await Collection.findByPk(collectionId, {
+            userId: user.id,
+          });
           authorize(user, "read", collection);
           authorize(user, "update", user.team);
 
@@ -192,7 +197,7 @@ if (env.SLACK_CLIENT_ID && env.SLACK_CLIENT_SECRET) {
               },
               { transaction }
             );
-            await Integration.create(
+            await Integration.create<Integration<IntegrationType.Post>>(
               {
                 service: IntegrationService.Slack,
                 type: IntegrationType.Post,
@@ -230,7 +235,7 @@ if (env.SLACK_CLIENT_ID && env.SLACK_CLIENT_SECRET) {
               },
               { transaction }
             );
-            await Integration.create(
+            await Integration.create<Integration<IntegrationType.Command>>(
               {
                 service: IntegrationService.Slack,
                 type: IntegrationType.Command,
@@ -250,7 +255,7 @@ if (env.SLACK_CLIENT_ID && env.SLACK_CLIENT_SECRET) {
         case IntegrationType.LinkedAccount: {
           // validation middleware ensures that code is non-null at this point
           const data = await Slack.oauthAccess(code!, SlackUtils.connectUrl());
-          await Integration.create({
+          await Integration.create<Integration<IntegrationType.LinkedAccount>>({
             service: IntegrationService.Slack,
             type: IntegrationType.LinkedAccount,
             userId: user.id,

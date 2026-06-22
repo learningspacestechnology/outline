@@ -1,6 +1,6 @@
-import isArrayLike from "lodash/isArrayLike";
+import { isArrayLike } from "es-toolkit/compat";
 import sanitize from "sanitize-filename";
-import { Primitive } from "utility-types";
+import type { Primitive } from "utility-types";
 import validator from "validator";
 import isIn from "validator/lib/isIn";
 import isUUID from "validator/lib/isUUID";
@@ -26,7 +26,7 @@ export function assertArray(
   message?: string
 ): asserts value {
   if (!isArrayLike(value)) {
-    throw ValidationError(message);
+    throw ValidationError(message ?? `${String(value)} is not an array`);
   }
 }
 
@@ -57,11 +57,13 @@ export function assertKeysIn(
 
 export const assertSort = (
   value: string,
-  model: any,
-  message = "Invalid sort parameter"
+  model: { rawAttributes: Record<string, unknown> },
+  message?: string
 ) => {
   if (!Object.keys(model.rawAttributes).includes(value)) {
-    throw ValidationError(message);
+    throw ValidationError(
+      message ?? `${String(value)} is not a valid sort field`
+    );
   }
 };
 
@@ -72,7 +74,7 @@ export function assertNotEmpty(
   assertPresent(value, message);
 
   if (typeof value === "string" && value.trim() === "") {
-    throw ValidationError(message);
+    throw ValidationError(message ?? `${String(value)} is empty`);
   }
 }
 
@@ -81,7 +83,7 @@ export function assertEmail(
   message?: string
 ): asserts value {
   if (typeof value !== "string" || !validator.isEmail(value)) {
-    throw ValidationError(message);
+    throw ValidationError(message ?? `${String(value)} is not a valid email`);
   }
 }
 
@@ -121,10 +123,12 @@ export function assertUuid(
   message?: string
 ): asserts value {
   if (typeof value !== "string") {
-    throw ValidationError(message);
+    throw ValidationError(
+      message ?? `${String(value)} is not a string, expected UUID`
+    );
   }
   if (!validator.isUUID(value)) {
-    throw ValidationError(message);
+    throw ValidationError(message ?? `${String(value)} is not a valid UUID`);
   }
 }
 
@@ -137,13 +141,17 @@ export const assertPositiveInteger = (
       min: 0,
     })
   ) {
-    throw ValidationError(message);
+    throw ValidationError(
+      message ?? `${String(value)} is not a positive integer`
+    );
   }
 };
 
 export const assertHexColor = (value: string, message?: string) => {
   if (!validateColorHex(value)) {
-    throw ValidationError(message);
+    throw ValidationError(
+      message ?? `${String(value)} is not a valid hex color`
+    );
   }
 };
 
@@ -153,7 +161,9 @@ export const assertValueInArray = (
   message?: string
 ) => {
   if (!values.includes(value)) {
-    throw ValidationError(message);
+    throw ValidationError(
+      message ?? `${String(value)} is not in the allowed values`
+    );
   }
 };
 
@@ -162,7 +172,7 @@ export const assertIndexCharacters = (
   message = "index must be between x20 to x7E ASCII"
 ) => {
   if (!validateIndexCharacters(value)) {
-    throw ValidationError(message);
+    throw ValidationError(message ?? `${String(value)} is not a valid index`);
   }
 };
 
@@ -176,20 +186,17 @@ export const assertCollectionPermission = (
 export class ValidateKey {
   /**
    * Checks if key is valid. A valid key is of the form
-   * <bucket>/<uuid>/<uuid>/<name>
+   * <bucket>/<uuid>/<uuid>/<name>?
    *
    * @param key
    * @returns true if key is valid, false otherwise
    */
   public static isValid = (key: string) => {
     let parts = key.split("/");
-    const bucket = parts[0];
-
-    // Avatars do not have a file name at the end of the key
-    parts = bucket === Buckets.avatars ? parts : parts.slice(0, -1);
 
     return (
-      parts.length === 3 &&
+      parts.length >= 3 &&
+      parts.length <= 4 &&
       isIn(parts[0], Object.values(Buckets)) &&
       isUUID(parts[1]) &&
       isUUID(parts[2])
@@ -209,10 +216,10 @@ export class ValidateKey {
       .slice(0, -1)
       .filter((part) => part !== "" && part !== ".." && part !== ".")
       .join("/")
-      .concat(`/${sanitize(filename)}`);
+      .concat(`/${sanitize(filename.replace(/#/g, ""))}`);
   };
 
-  public static message = "Must be of the form <bucket>/<uuid>/<uuid>/<name>";
+  public static message = "Must be of the form <bucket>/<uuid>/<uuid>/<name>?";
 }
 
 export class ValidateDocumentId {
@@ -248,12 +255,13 @@ export class ValidateURL {
 
       const { id, mentionType, modelId } = parseMentionUrl(url);
       return (
-        id &&
-        isUUID(id) &&
+        (!id || isUUID(id)) &&
+        !!mentionType &&
         Object.values(MentionType).includes(mentionType as MentionType) &&
+        !!modelId &&
         isUUID(modelId)
       );
-    } catch (err) {
+    } catch (_err) {
       return false;
     }
   };

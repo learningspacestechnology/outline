@@ -1,10 +1,17 @@
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID } from "node:crypto";
+import sharedEnv from "@shared/env";
+import env from "@server/env";
+import { AuthenticationProvider } from "@server/models";
 import { buildUser, buildAdmin, buildTeam } from "@server/test/factories";
 import { getTestServer, setSelfHosted } from "@server/test/support";
 
 const server = getTestServer();
 
 beforeEach(setSelfHosted);
+
+function setCloudHosted() {
+  env.URL = sharedEnv.URL = "https://app.getoutline.com";
+}
 
 describe("#authenticationProviders.info", () => {
   it("should return auth provider", async () => {
@@ -13,10 +20,9 @@ describe("#authenticationProviders.info", () => {
       teamId: team.id,
     });
     const authenticationProviders = await team.$get("authenticationProviders");
-    const res = await server.post("/api/authenticationProviders.info", {
+    const res = await server.post("/api/authenticationProviders.info", user, {
       body: {
         id: authenticationProviders[0].id,
-        token: user.getJwtToken(),
       },
     });
     const body = await res.json();
@@ -32,10 +38,9 @@ describe("#authenticationProviders.info", () => {
     const team = await buildTeam();
     const user = await buildUser();
     const authenticationProviders = await team.$get("authenticationProviders");
-    const res = await server.post("/api/authenticationProviders.info", {
+    const res = await server.post("/api/authenticationProviders.info", user, {
       body: {
         id: authenticationProviders[0].id,
-        token: user.getJwtToken(),
       },
     });
     expect(res.status).toEqual(403);
@@ -55,16 +60,17 @@ describe("#authenticationProviders.info", () => {
 
 describe("#authenticationProviders.update", () => {
   it("should not allow admins to disable when last authentication provider", async () => {
-    const team = await buildTeam();
+    const team = await buildTeam({
+      guestSignin: false,
+    });
     const user = await buildAdmin({
       teamId: team.id,
     });
     const authenticationProviders = await team.$get("authenticationProviders");
-    const res = await server.post("/api/authenticationProviders.update", {
+    const res = await server.post("/api/authenticationProviders.update", user, {
       body: {
         id: authenticationProviders[0].id,
         isEnabled: false,
-        token: user.getJwtToken(),
       },
     });
     expect(res.status).toEqual(400);
@@ -77,13 +83,12 @@ describe("#authenticationProviders.update", () => {
     });
     const googleProvider = await team.$create("authenticationProvider", {
       name: "google",
-      providerId: uuidv4(),
+      providerId: randomUUID(),
     });
-    const res = await server.post("/api/authenticationProviders.update", {
+    const res = await server.post("/api/authenticationProviders.update", user, {
       body: {
         id: googleProvider.id,
         isEnabled: false,
-        token: user.getJwtToken(),
       },
     });
     const body = await res.json();
@@ -97,11 +102,10 @@ describe("#authenticationProviders.update", () => {
     const team = await buildTeam();
     const user = await buildUser({ teamId: team.id });
     const authenticationProviders = await team.$get("authenticationProviders");
-    const res = await server.post("/api/authenticationProviders.update", {
+    const res = await server.post("/api/authenticationProviders.update", user, {
       body: {
         id: authenticationProviders[0].id,
         isEnabled: false,
-        token: user.getJwtToken(),
       },
     });
     expect(res.status).toEqual(403);
@@ -126,11 +130,7 @@ describe("#authenticationProviders.list", () => {
     const user = await buildAdmin({
       teamId: team.id,
     });
-    const res = await server.post("/api/authenticationProviders.list", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/authenticationProviders.list", user);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data.length).toBe(3);
@@ -147,6 +147,80 @@ describe("#authenticationProviders.list", () => {
 
   it("should require authentication", async () => {
     const res = await server.post("/api/authenticationProviders.list");
+    expect(res.status).toEqual(401);
+  });
+});
+
+describe("#authenticationProviders.delete", () => {
+  it("should disable the provider on self-hosted and keep the row", async () => {
+    const team = await buildTeam();
+    const user = await buildAdmin({
+      teamId: team.id,
+    });
+    const googleProvider = await team.$create("authenticationProvider", {
+      name: "google",
+      providerId: randomUUID(),
+    });
+    const res = await server.post("/api/authenticationProviders.delete", user, {
+      body: {
+        id: googleProvider.id,
+      },
+    });
+    expect(res.status).toEqual(200);
+    const reloaded = await AuthenticationProvider.findByPk(googleProvider.id);
+    expect(reloaded?.enabled).toBe(false);
+  });
+
+  it("should destroy the provider on cloud hosted", async () => {
+    setCloudHosted();
+    const team = await buildTeam();
+    const user = await buildAdmin({
+      teamId: team.id,
+    });
+    const googleProvider = await team.$create("authenticationProvider", {
+      name: "google",
+      providerId: randomUUID(),
+    });
+    const res = await server.post("/api/authenticationProviders.delete", user, {
+      body: {
+        id: googleProvider.id,
+      },
+    });
+    expect(res.status).toEqual(200);
+    const count = await team.$count("authenticationProviders", {
+      where: {
+        id: googleProvider.id,
+      },
+    });
+    expect(count).toBe(0);
+  });
+
+  it("should require authorization", async () => {
+    const team = await buildTeam();
+    const user = await buildUser();
+    const googleProvider = await team.$create("authenticationProvider", {
+      name: "google",
+      providerId: randomUUID(),
+    });
+    const res = await server.post("/api/authenticationProviders.delete", user, {
+      body: {
+        id: googleProvider.id,
+      },
+    });
+    expect(res.status).toEqual(403);
+  });
+
+  it("should require authentication", async () => {
+    const team = await buildTeam();
+    const googleProvider = await team.$create("authenticationProvider", {
+      name: "google",
+      providerId: randomUUID(),
+    });
+    const res = await server.post("/api/authenticationProviders.delete", {
+      body: {
+        id: googleProvider.id,
+      },
+    });
     expect(res.status).toEqual(401);
   });
 });

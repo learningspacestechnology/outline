@@ -1,13 +1,10 @@
 import { DoneIcon, SmileyIcon, TrashIcon } from "outline-icons";
-import * as React from "react";
 import { toast } from "sonner";
-import stores from "~/stores";
-import Comment from "~/models/Comment";
+import type Comment from "~/models/Comment";
 import CommentDeleteDialog from "~/components/CommentDeleteDialog";
 import ViewReactionsDialog from "~/components/Reactions/ViewReactionsDialog";
-import history from "~/utils/history";
 import { createAction } from "..";
-import { DocumentSection } from "../sections";
+import { ActiveDocumentSection } from "../sections";
 
 export const deleteCommentFactory = ({
   comment,
@@ -19,12 +16,12 @@ export const deleteCommentFactory = ({
   createAction({
     name: ({ t }) => `${t("Delete")}…`,
     analyticsName: "Delete comment",
-    section: DocumentSection,
+    section: ActiveDocumentSection,
     icon: <TrashIcon />,
     keywords: "trash",
     dangerous: true,
-    visible: () => stores.policies.abilities(comment.id).delete,
-    perform: ({ t, event }) => {
+    visible: ({ stores }) => stores.policies.abilities(comment.id).delete,
+    perform: ({ t, stores, event }) => {
       event?.preventDefault();
       event?.stopPropagation();
 
@@ -45,23 +42,13 @@ export const resolveCommentFactory = ({
   createAction({
     name: ({ t }) => t("Mark as resolved"),
     analyticsName: "Resolve thread",
-    section: DocumentSection,
+    section: ActiveDocumentSection,
     icon: <DoneIcon outline />,
-    visible: () =>
+    visible: ({ stores }) =>
       stores.policies.abilities(comment.id).resolve &&
       stores.policies.abilities(comment.documentId).update,
     perform: async ({ t }) => {
       await comment.resolve();
-
-      const locationState = history.location.state as Record<string, unknown>;
-      history.replace({
-        ...history.location,
-        state: {
-          sidebarContext: locationState["sidebarContext"],
-          commentId: undefined,
-        },
-      });
-
       onResolve();
       toast.success(t("Thread resolved"));
     },
@@ -77,23 +64,13 @@ export const unresolveCommentFactory = ({
   createAction({
     name: ({ t }) => t("Mark as unresolved"),
     analyticsName: "Unresolve thread",
-    section: DocumentSection,
+    section: ActiveDocumentSection,
     icon: <DoneIcon outline />,
-    visible: () =>
+    visible: ({ stores }) =>
       stores.policies.abilities(comment.id).unresolve &&
       stores.policies.abilities(comment.documentId).update,
     perform: async () => {
       await comment.unresolve();
-
-      const locationState = history.location.state as Record<string, unknown>;
-      history.replace({
-        ...history.location,
-        state: {
-          sidebarContext: locationState["sidebarContext"],
-          commentId: undefined,
-        },
-      });
-
       onUnresolve();
     },
   });
@@ -106,12 +83,12 @@ export const viewCommentReactionsFactory = ({
   createAction({
     name: ({ t }) => `${t("View reactions")}`,
     analyticsName: "View comment reactions",
-    section: DocumentSection,
+    section: ActiveDocumentSection,
     icon: <SmileyIcon />,
-    visible: () =>
+    visible: ({ stores }) =>
       stores.policies.abilities(comment.id).read &&
       comment.reactions.length > 0,
-    perform: ({ t, event }) => {
+    perform: ({ t, stores, event }) => {
       event?.preventDefault();
       event?.stopPropagation();
 

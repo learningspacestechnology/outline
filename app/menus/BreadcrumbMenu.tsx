@@ -1,28 +1,42 @@
-import * as React from "react";
 import { useTranslation } from "react-i18next";
-import { useMenuState } from "reakit/Menu";
-import ContextMenu from "~/components/ContextMenu";
-import OverflowMenuButton from "~/components/ContextMenu/OverflowMenuButton";
-import Template from "~/components/ContextMenu/Template";
-import { MenuInternalLink } from "~/types";
+import styled from "styled-components";
+import { s } from "@shared/styles";
+import { DropdownMenu } from "~/components/Menu/DropdownMenu";
+import { OverflowMenuButton } from "~/components/Menu/OverflowMenuButton";
+import { useMenuAction } from "~/hooks/useMenuAction";
+import type { InternalLinkAction } from "~/types";
 
 type Props = {
-  items: MenuInternalLink[];
+  actions: InternalLinkAction[];
 };
 
-export default function BreadcrumbMenu({ items }: Props) {
+export default function BreadcrumbMenu({ actions }: Props) {
   const { t } = useTranslation();
-  const menu = useMenuState({
-    modal: true,
-    placement: "bottom",
-  });
+
+  const rootAction = useMenuAction(actions);
 
   return (
-    <>
-      <OverflowMenuButton aria-label={t("Show path to document")} {...menu} />
-      <ContextMenu {...menu} aria-label={t("Path to document")}>
-        <Template {...menu} items={items} />
-      </ContextMenu>
-    </>
+    <DropdownMenu action={rootAction} ariaLabel={t("Show path to document")}>
+      <Button />
+    </DropdownMenu>
   );
 }
+
+const Button = styled(OverflowMenuButton)`
+  && {
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    margin-inline: -4px;
+    transition: background 100ms ease-in-out;
+  }
+
+  &&:hover,
+  &&[data-state="open"] {
+    background: ${s("buttonNeutralHoverBackground")};
+    transition: none;
+  }
+`;

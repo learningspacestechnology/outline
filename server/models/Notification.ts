@@ -1,4 +1,4 @@
-import crypto from "crypto";
+import crypto from "node:crypto";
 import type {
   InferAttributes,
   InferCreationAttributes,
@@ -19,6 +19,7 @@ import {
   AfterCreate,
   DefaultScope,
 } from "sequelize-typescript";
+import type { NotificationData } from "@shared/types";
 import { NotificationEventType } from "@shared/types";
 import { getBaseDomain } from "@shared/utils/domains";
 import env from "@server/env";
@@ -30,7 +31,9 @@ import Event from "./Event";
 import Revision from "./Revision";
 import Team from "./Team";
 import User from "./User";
+import Group from "./Group";
 import Fix from "./decorators/Fix";
+import AccessRequest from "./AccessRequest";
 
 let baseDomain;
 
@@ -39,6 +42,7 @@ let baseDomain;
     include: [
       {
         association: "team",
+        required: true,
       },
     ],
   },
@@ -60,6 +64,7 @@ let baseDomain;
     include: [
       {
         association: "actor",
+        required: true,
       },
     ],
   },
@@ -67,6 +72,7 @@ let baseDomain;
     include: [
       {
         association: "user",
+        required: true,
       },
     ],
   },
@@ -83,6 +89,10 @@ let baseDomain;
     },
     {
       association: "actor",
+      required: false,
+    },
+    {
+      association: "accessRequest",
       required: false,
     },
   ],
@@ -118,10 +128,20 @@ class Notification extends Model<
   @CreatedAt
   createdAt: Date;
 
+  @Column(DataType.JSONB)
+  data: NotificationData | null;
+
   @Column(DataType.STRING)
   event: NotificationEventType;
 
   // associations
+  @BelongsTo(() => Group, "groupId")
+  group: Group;
+
+  @AllowNull
+  @ForeignKey(() => User)
+  @Column(DataType.UUID)
+  groupId: string;
 
   @BelongsTo(() => User, "userId")
   user: User;
@@ -181,6 +201,14 @@ class Notification extends Model<
   @Column(DataType.UUID)
   membershipId: string;
 
+  @BelongsTo(() => AccessRequest, "accessRequestId")
+  accessRequest: AccessRequest;
+
+  @AllowNull
+  @ForeignKey(() => AccessRequest)
+  @Column(DataType.UUID)
+  accessRequestId: string;
+
   @AfterCreate
   static async createEvent(
     model: Notification,
@@ -196,6 +224,7 @@ class Notification extends Model<
       collectionId: model.collectionId,
       actorId: model.actorId,
       membershipId: model.membershipId,
+      groupId: model.groupId,
     };
 
     if (options.transaction) {
@@ -253,6 +282,10 @@ class Notification extends Model<
       case NotificationEventType.PublishDocument:
       case NotificationEventType.UpdateDocument:
         name = `${notification.documentId}-updates`;
+        break;
+      case NotificationEventType.GroupMentionedInComment:
+      case NotificationEventType.GroupMentionedInDocument:
+        name = `${notification.documentId}-group-mentions`;
         break;
       case NotificationEventType.MentionedInDocument:
       case NotificationEventType.MentionedInComment:

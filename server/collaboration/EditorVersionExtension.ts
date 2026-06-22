@@ -1,10 +1,10 @@
-import { Extension, onConnectPayload } from "@hocuspocus/server";
+import type { Extension, onConnectPayload } from "@hocuspocus/server";
 import semver from "semver";
 import { EditorUpdateError } from "@shared/collaboration/CloseEvents";
 import EDITOR_VERSION from "@shared/editor/version";
 import Logger from "@server/logging/Logger";
 import { trace } from "@server/logging/tracing";
-import { withContext } from "./types";
+import type { withContext } from "./types";
 
 @trace()
 export class EditorVersionExtension implements Extension {
@@ -18,21 +18,27 @@ export class EditorVersionExtension implements Extension {
   onConnect({ requestParameters }: withContext<onConnectPayload>) {
     const clientVersion = requestParameters.get("editorVersion");
 
-    if (clientVersion) {
-      const parsedClientVersion = semver.parse(clientVersion);
-      const parsedServerVersion = semver.parse(EDITOR_VERSION);
+    if (!clientVersion) {
+      Logger.debug(
+        "multiplayer",
+        "Dropping connection due to missing editor version"
+      );
+      return Promise.reject(EditorUpdateError);
+    }
 
-      if (
-        parsedClientVersion &&
-        parsedServerVersion &&
-        parsedClientVersion.major < parsedServerVersion.major
-      ) {
-        Logger.debug(
-          "multiplayer",
-          `Dropping connection due to outdated editor version: ${clientVersion} < ${EDITOR_VERSION}`
-        );
-        return Promise.reject(EditorUpdateError);
-      }
+    const parsedClientVersion = semver.parse(clientVersion);
+    const parsedServerVersion = semver.parse(EDITOR_VERSION);
+
+    if (
+      parsedClientVersion &&
+      parsedServerVersion &&
+      parsedClientVersion.major < parsedServerVersion.major
+    ) {
+      Logger.debug(
+        "multiplayer",
+        `Dropping connection due to outdated editor version: ${clientVersion} < ${EDITOR_VERSION}`
+      );
+      return Promise.reject(EditorUpdateError);
     }
 
     return Promise.resolve();

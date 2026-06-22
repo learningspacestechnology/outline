@@ -1,9 +1,11 @@
-import compact from "lodash/compact";
+import { compact } from "es-toolkit/compat";
+import { observer } from "mobx-react";
 import * as React from "react";
+import { useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { unicodeCLDRtoBCP47 } from "@shared/utils/date";
-import Share from "~/models/Share";
+import type Share from "~/models/Share";
 import { Avatar, AvatarSize } from "~/components/Avatar";
+import Badge from "~/components/Badge";
 import Flex from "~/components/Flex";
 import { HEADER_HEIGHT } from "~/components/Header";
 import {
@@ -11,10 +13,12 @@ import {
   SortableTable,
 } from "~/components/SortableTable";
 import { type Column as TableColumn } from "~/components/Table";
+import { ContextMenu } from "~/components/Menu/ContextMenu";
+import { useShareMenuActions } from "~/hooks/useShareMenuActions";
 import Time from "~/components/Time";
-import useUserLocale from "~/hooks/useUserLocale";
 import ShareMenu from "~/menus/ShareMenu";
-import { formatNumber } from "~/utils/language";
+import { useFormatNumber } from "~/hooks/useFormatNumber";
+import { HStack } from "~/components/primitives/HStack";
 
 const ROW_HEIGHT = 50;
 
@@ -22,21 +26,52 @@ type Props = Omit<TableProps<Share>, "columns" | "rowHeight"> & {
   canManage: boolean;
 };
 
+const ShareRowContextMenu = observer(function ShareRowContextMenu({
+  share,
+  menuLabel,
+  children,
+}: {
+  share: Share;
+  menuLabel: string;
+  children: React.ReactNode;
+}) {
+  const action = useShareMenuActions(share);
+  return (
+    <ContextMenu action={action} ariaLabel={menuLabel}>
+      {children}
+    </ContextMenu>
+  );
+});
+
 export function SharesTable({ data, canManage, ...rest }: Props) {
   const { t } = useTranslation();
-  const language = useUserLocale();
+  const formatNumber = useFormatNumber();
   const hasDomain = data.some((share) => share.domain);
 
-  const columns = React.useMemo<TableColumn<Share>[]>(
+  const applyContextMenu = useCallback(
+    (share: Share, rowElement: React.ReactNode) => (
+      <ShareRowContextMenu share={share} menuLabel={t("Share options")}>
+        {rowElement}
+      </ShareRowContextMenu>
+    ),
+    [t]
+  );
+
+  const columns = useMemo<TableColumn<Share>[]>(
     () =>
       compact<TableColumn<Share>>([
         {
           type: "data",
           id: "title",
-          header: t("Document"),
-          accessor: (share) => share.documentTitle || t("Untitled"),
+          header: t("Title"),
+          accessor: (share) => share.sourceTitle || t("Untitled"),
           sortable: false,
-          component: (share) => <>{share.documentTitle || t("Untitled")}</>,
+          component: (share) => (
+            <>
+              {share.sourceTitle || t("Untitled")}{" "}
+              {share.collectionId ? <Badge>{t("Collection")}</Badge> : null}
+            </>
+          ),
           width: "4fr",
         },
         {
@@ -46,14 +81,14 @@ export function SharesTable({ data, canManage, ...rest }: Props) {
           accessor: (share) => share.createdBy,
           sortable: false,
           component: (share) => (
-            <Flex align="center" gap={8}>
+            <HStack>
               {share.createdBy && (
                 <>
                   <Avatar model={share.createdBy} size={AvatarSize.Small} />
                   {share.createdBy.name}
                 </>
               )}
-            </Flex>
+            </HStack>
           ),
           width: "2fr",
         },
@@ -95,13 +130,7 @@ export function SharesTable({ data, canManage, ...rest }: Props) {
           id: "views",
           header: t("Views"),
           accessor: (share) => share.views,
-          component: (share) => (
-            <>
-              {language
-                ? formatNumber(share.views, unicodeCLDRtoBCP47(language))
-                : share.views}
-            </>
-          ),
+          component: (share) => formatNumber(share.views),
           width: "150px",
         },
         canManage
@@ -117,7 +146,7 @@ export function SharesTable({ data, canManage, ...rest }: Props) {
             }
           : undefined,
       ]),
-    [t, language, hasDomain, canManage]
+    [t, hasDomain, canManage, formatNumber]
   );
 
   return (
@@ -126,6 +155,7 @@ export function SharesTable({ data, canManage, ...rest }: Props) {
       columns={columns}
       rowHeight={ROW_HEIGHT}
       stickyOffset={HEADER_HEIGHT}
+      decorateRow={canManage ? applyContextMenu : undefined}
       {...rest}
     />
   );

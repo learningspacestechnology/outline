@@ -4,21 +4,21 @@ import { now } from "mobx-utils";
 import { UserPreferenceDefaults } from "@shared/constants";
 import {
   NotificationEventDefaults,
-  NotificationEventType,
+  type NotificationEventType,
   TeamPreference,
   UserPreference,
-  UserPreferences,
+  type UserPreferences,
   UserRole,
 } from "@shared/types";
 import type { NotificationSettings } from "@shared/types";
-import { locales } from "@shared/utils/date";
+import type { locales } from "@shared/utils/date";
 import { client } from "~/utils/ApiClient";
-import Document from "./Document";
-import Group from "./Group";
-import UserMembership from "./UserMembership";
+import type Document from "./Document";
+import type Group from "./Group";
+import type UserMembership from "./UserMembership";
 import ParanoidModel from "./base/ParanoidModel";
 import Field from "./decorators/Field";
-import { Searchable } from "./interfaces/Searchable";
+import type { Searchable } from "./interfaces/Searchable";
 
 class User extends ParanoidModel implements Searchable {
   static modelName = "User";
@@ -58,19 +58,52 @@ class User extends ParanoidModel implements Searchable {
   role: UserRole;
 
   @observable
-  lastActiveAt: string;
+  protected _lastActiveAt: string;
+
+  /**
+   * The last time the user was active. For the currently signed-in user, this
+   * always returns the current date so they always appear as recently active.
+   */
+  @computed
+  get lastActiveAt(): string {
+    if (this.store.rootStore.auth?.currentUserId === this.id) {
+      return new Date(now(60000)).toISOString();
+    }
+    return this._lastActiveAt;
+  }
+
+  set lastActiveAt(value: string) {
+    this._lastActiveAt = value;
+  }
 
   @observable
   isSuspended: boolean;
 
   @computed
   get searchContent(): string[] {
-    return [this.name, this.email].filter(Boolean);
+    return [this.name, this.email, this.initials].filter(Boolean);
+  }
+
+  @computed
+  get searchSuppressed(): boolean {
+    return this.isDeleted;
   }
 
   @computed
   get initial(): string {
     return (this.name ? this.name[0] : "?").toUpperCase();
+  }
+
+  @computed
+  get initials(): string {
+    if (!this.name) {
+      return "";
+    }
+    const names = this.name.trim().split(" ");
+    if (names.length === 1) {
+      return names[0][0].toUpperCase();
+    }
+    return (names[0][0] + names[names.length - 1][0]).toUpperCase();
   }
 
   /**
@@ -137,7 +170,7 @@ class User extends ParanoidModel implements Searchable {
 
   /**
    * Returns the direct memberships that this user has to documents. Documents that the
-   * user already has access to through a collection and trashed documents are not included.
+   * user already has access to through a collection, archived, and trashed documents are not included.
    *
    * @returns A list of user memberships
    */
@@ -153,7 +186,7 @@ class User extends ParanoidModel implements Searchable {
         const policy = document?.collectionId
           ? policies.get(document.collectionId)
           : undefined;
-        return !policy?.abilities?.readDocument && !document?.isDeleted;
+        return !policy?.abilities?.readDocument && !!document?.isActive;
       });
   }
 
@@ -214,10 +247,14 @@ class User extends ParanoidModel implements Searchable {
    * @param key The UserPreference key to retrieve
    * @returns The value
    */
-  getPreference(key: UserPreference, defaultValue = false): boolean {
-    return (
-      this.preferences?.[key] ?? UserPreferenceDefaults[key] ?? defaultValue
-    );
+  getPreference<K extends UserPreference>(
+    key: K,
+    defaultValue?: UserPreferences[K]
+  ): NonNullable<UserPreferences[K]> {
+    return (this.preferences?.[key] ??
+      UserPreferenceDefaults[key] ??
+      defaultValue ??
+      false) as NonNullable<UserPreferences[K]>;
   }
 
   /**
@@ -226,7 +263,11 @@ class User extends ParanoidModel implements Searchable {
    * @param key The UserPreference key to retrieve
    * @param value The value to set
    */
-  setPreference(key: UserPreference, value: boolean) {
+  @action
+  setPreference<K extends UserPreference>(
+    key: K,
+    value: NonNullable<UserPreferences[K]>
+  ) {
     this.preferences = {
       ...this.preferences,
       [key]: value,

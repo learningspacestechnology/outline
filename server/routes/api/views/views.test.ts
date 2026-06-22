@@ -1,4 +1,5 @@
 import { CollectionPermission } from "@shared/types";
+import { createContext } from "@server/context";
 import { View, UserMembership } from "@server/models";
 import {
   buildAdmin,
@@ -18,13 +19,12 @@ describe("#views.list", () => {
       userId: user.id,
       teamId: user.teamId,
     });
-    await View.incrementOrCreate({
+    await View.incrementOrCreate(createContext({ user }), {
       documentId: document.id,
       userId: user.id,
     });
-    const res = await server.post("/api/views.list", {
+    const res = await server.post("/api/views.list", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -39,16 +39,15 @@ describe("#views.list", () => {
     const admin = await buildAdmin({ teamId: team.id });
     const user = await buildUser({ teamId: team.id });
     const document = await buildDocument({ userId: user.id, teamId: team.id });
-    await View.incrementOrCreate({
+    await View.incrementOrCreate(createContext({ user }), {
       documentId: document.id,
       userId: user.id,
     });
 
     await user.update({ suspendedAt: new Date() });
 
-    const res = await server.post("/api/views.list", {
+    const res = await server.post("/api/views.list", admin, {
       body: {
-        token: admin.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -77,13 +76,12 @@ describe("#views.list", () => {
       userId: user.id,
       permission: CollectionPermission.Read,
     });
-    await View.incrementOrCreate({
+    await View.incrementOrCreate(createContext({ user }), {
       documentId: document.id,
       userId: user.id,
     });
-    const res = await server.post("/api/views.list", {
+    const res = await server.post("/api/views.list", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -108,9 +106,8 @@ describe("#views.list", () => {
   it("should require authorization", async () => {
     const document = await buildDocument();
     const user = await buildUser();
-    const res = await server.post("/api/views.list", {
+    const res = await server.post("/api/views.list", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -125,9 +122,8 @@ describe("#views.create", () => {
       userId: user.id,
       teamId: user.teamId,
     });
-    const res = await server.post("/api/views.create", {
+    const res = await server.post("/api/views.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -156,9 +152,8 @@ describe("#views.create", () => {
       userId: user.id,
       permission: CollectionPermission.Read,
     });
-    const res = await server.post("/api/views.create", {
+    const res = await server.post("/api/views.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -182,9 +177,8 @@ describe("#views.create", () => {
   it("should require authorization", async () => {
     const document = await buildDocument();
     const user = await buildUser();
-    const res = await server.post("/api/views.create", {
+    const res = await server.post("/api/views.create", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });

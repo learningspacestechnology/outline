@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { NotionImportInputItemSchema } from "@shared/schema";
 import {
+  CollectionPermission,
   ImportableIntegrationService,
   IntegrationService,
 } from "@shared/types";
@@ -8,7 +9,7 @@ import { BaseSchema } from "../schema";
 
 const BaseIdSchema = z.object({
   /** Id of the import */
-  id: z.string().uuid(),
+  id: z.uuid(),
 });
 
 const ImportsSortParamsSchema = z.object({
@@ -16,9 +17,9 @@ const ImportsSortParamsSchema = z.object({
   sort: z
     .string()
     .refine((val) => ["createdAt", "updatedAt", "service"].includes(val), {
-      message: "Invalid sort parameter",
+      error: "Invalid sort parameter",
     })
-    .default("createdAt"),
+    .prefault("createdAt"),
 
   /** Specifies the sort order with respect to sort field. */
   direction: z
@@ -28,7 +29,7 @@ const ImportsSortParamsSchema = z.object({
 });
 
 const BaseBodySchema = z.object({
-  integrationId: z.string().uuid(),
+  integrationId: z.uuid(),
 });
 
 export const ImportsCreateSchema = BaseSchema.extend({
@@ -37,6 +38,16 @@ export const ImportsCreateSchema = BaseSchema.extend({
       service: z.literal(IntegrationService.Notion),
       input: z.array(NotionImportInputItemSchema),
     }),
+    z.object({
+      service: z.literal(IntegrationService.Markdown),
+      attachmentId: z.uuid(),
+      permission: z.enum(CollectionPermission).optional(),
+    }),
+    z.object({
+      service: z.literal(IntegrationService.JSON),
+      attachmentId: z.uuid(),
+      permission: z.enum(CollectionPermission).optional(),
+    }),
   ]),
 });
 
@@ -44,7 +55,7 @@ export type ImportsCreateReq = z.infer<typeof ImportsCreateSchema>;
 
 export const ImportsListSchema = BaseSchema.extend({
   body: ImportsSortParamsSchema.extend({
-    service: z.nativeEnum(ImportableIntegrationService).optional(),
+    service: z.enum(ImportableIntegrationService).optional(),
   }),
 });
 

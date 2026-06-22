@@ -1,15 +1,26 @@
-import { AlignFullWidthIcon, DownloadIcon, TrashIcon } from "outline-icons";
-import { EditorState } from "prosemirror-state";
-import * as React from "react";
+import {
+  AlignFullWidthIcon,
+  DownloadIcon,
+  TableColumnsDistributeIcon,
+  TrashIcon,
+} from "outline-icons";
 import { isNodeActive } from "@shared/editor/queries/isNodeActive";
-import { MenuItem, TableLayout } from "@shared/editor/types";
-import { Dictionary } from "~/hooks/useDictionary";
+import { t } from "i18next";
+import type { MenuItem, SelectionContext } from "@shared/editor/types";
+import { TableLayout } from "@shared/editor/types";
 
-export default function tableMenuItems(
-  state: EditorState,
-  dictionary: Dictionary
-): MenuItem[] {
-  const { schema } = state;
+/**
+ * Returns menu items for the table selection toolbar (full table selected).
+ *
+ * @param ctx - the current selection context.
+ * @returns an array of menu items.
+ */
+export default function tableMenuItems(ctx: SelectionContext): MenuItem[] {
+  if (ctx.readOnly) {
+    return [];
+  }
+  const { schema, state } = ctx;
+
   const isFullWidth = isNodeActive(schema.nodes.table, {
     layout: TableLayout.fullWidth,
   })(state);
@@ -17,30 +28,32 @@ export default function tableMenuItems(
   return [
     {
       name: "setTableAttr",
-      tooltip: isFullWidth
-        ? dictionary.alignDefaultWidth
-        : dictionary.alignFullWidth,
+      label: isFullWidth ? t("Default width") : t("Full width"),
       icon: <AlignFullWidthIcon />,
       attrs: isFullWidth ? { layout: null } : { layout: TableLayout.fullWidth },
-      active: () => isFullWidth,
     },
     {
-      name: "separator",
-    },
-    {
-      name: "deleteTable",
-      tooltip: dictionary.deleteTable,
-      icon: <TrashIcon />,
+      name: "distributeColumns",
+      label: t("Distribute columns"),
+      icon: <TableColumnsDistributeIcon />,
     },
     {
       name: "separator",
     },
     {
       name: "exportTable",
-      tooltip: dictionary.exportAsCSV,
-      label: "CSV",
+      label: t("Export as CSV"),
       attrs: { format: "csv", fileName: `${window.document.title}.csv` },
       icon: <DownloadIcon />,
+    },
+    {
+      name: "separator",
+    },
+    {
+      name: "deleteTable",
+      label: t("Delete table"),
+      dangerous: true,
+      icon: <TrashIcon />,
     },
   ];
 }

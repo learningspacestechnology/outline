@@ -1,16 +1,17 @@
-import capitalize from "lodash/capitalize";
+import { capitalize } from "es-toolkit/compat";
 import { observer } from "mobx-react";
 import { CrossIcon, DoneIcon, WarningIcon } from "outline-icons";
-import React from "react";
+import { useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useTheme } from "styled-components";
+import { errToString } from "@shared/utils/error";
+import Spinner from "@shared/components/Spinner";
 import { ImportState } from "@shared/types";
-import Import from "~/models/Import";
+import type Import from "~/models/Import";
 import { Action } from "~/components/Actions";
 import ConfirmationDialog from "~/components/ConfirmationDialog";
 import ListItem from "~/components/List/Item";
-import Spinner from "~/components/Spinner";
 import Time from "~/components/Time";
 import useCurrentUser from "~/hooks/useCurrentUser";
 import useStores from "~/hooks/useStores";
@@ -30,12 +31,8 @@ export const ImportListItem = observer(({ importModel }: Props) => {
   const showProgress =
     importModel.state !== ImportState.Canceled &&
     importModel.state !== ImportState.Errored;
-  const showErrorInfo =
-    !isCloudHosted &&
-    importModel.state === ImportState.Errored &&
-    !!importModel.error;
 
-  const stateMap = React.useMemo(
+  const stateMap = useMemo(
     () => ({
       [ImportState.Created]: t("Processing"),
       [ImportState.InProgress]: t("Processing"),
@@ -47,7 +44,7 @@ export const ImportListItem = observer(({ importModel }: Props) => {
     [t]
   );
 
-  const iconMap = React.useMemo(
+  const iconMap = useMemo(
     () => ({
       [ImportState.Created]: <Spinner />,
       [ImportState.InProgress]: <Spinner />,
@@ -59,13 +56,13 @@ export const ImportListItem = observer(({ importModel }: Props) => {
     [theme]
   );
 
-  const handleCancel = React.useCallback(async () => {
+  const handleCancel = useCallback(async () => {
     const onCancel = async () => {
       try {
         await importModel.cancel();
         toast.success(t("Import canceled"));
       } catch (err) {
-        toast.error(err.message);
+        toast.error(errToString(err));
       }
     };
 
@@ -86,13 +83,13 @@ export const ImportListItem = observer(({ importModel }: Props) => {
     });
   }, [t, dialogs, importModel]);
 
-  const handleDelete = React.useCallback(async () => {
+  const handleDelete = useCallback(async () => {
     const onDelete = async () => {
       try {
         await importModel.delete();
         toast.success(t("Import deleted"));
       } catch (err) {
-        toast.error(err.message);
+        toast.error(errToString(err));
       }
     };
 
@@ -112,6 +109,10 @@ export const ImportListItem = observer(({ importModel }: Props) => {
     });
   }, [t, dialogs, importModel]);
 
+  const selfHostedHelp = isCloudHosted
+    ? ""
+    : `. ${t("Check server logs for more details.")}`;
+
   return (
     <ListItem
       title={importModel.name}
@@ -119,10 +120,10 @@ export const ImportListItem = observer(({ importModel }: Props) => {
       subtitle={
         <>
           {stateMap[importModel.state]}&nbsp;•&nbsp;
-          {showErrorInfo && (
+          {importModel.error && (
             <>
               {importModel.error}
-              {`. ${t("Check server logs for more details.")}`}&nbsp;•&nbsp;
+              {selfHostedHelp}&nbsp;•&nbsp;
             </>
           )}
           {t(`{{userName}} requested`, {

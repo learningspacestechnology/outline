@@ -1,5 +1,5 @@
 import emailProviders from "email-providers";
-import { InferAttributes, InferCreationAttributes } from "sequelize";
+import type { InferAttributes, InferCreationAttributes } from "sequelize";
 import {
   Column,
   Table,
@@ -31,7 +31,10 @@ class TeamDomain extends IdModel<
     msg: "You chose a restricted domain, please try another.",
   })
   @NotEmpty
-  @Length({ max: 255, msg: "name must be 255 characters or less" })
+  @Length({
+    max: TeamValidation.maxDomainLength,
+    msg: `name must be ${TeamValidation.maxDomainLength} characters or less`,
+  })
   @IsFQDN
   @Column
   name: string;

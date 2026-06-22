@@ -1,9 +1,7 @@
-import * as React from "react";
-import Collection from "~/models/Collection";
+import { useState, useCallback } from "react";
+import type Collection from "~/models/Collection";
 import useStores from "~/hooks/useStores";
 import CollectionLink from "./CollectionLink";
-import CollectionLinkChildren from "./CollectionLinkChildren";
-import Relative from "./Relative";
 
 type Props = {
   collection: Collection;
@@ -12,36 +10,26 @@ type Props = {
 
 export function ArchivedCollectionLink({ collection, depth }: Props) {
   const { documents } = useStores();
+  const [expanded, setExpanded] = useState(false);
 
-  const [expanded, setExpanded] = React.useState(false);
-
-  const handleDisclosureClick = React.useCallback((ev) => {
+  const handleDisclosureClick = useCallback((ev) => {
     ev.preventDefault();
     ev.stopPropagation();
     setExpanded((e) => !e);
   }, []);
 
-  const handleClick = React.useCallback(() => {
+  const handleClick = useCallback(() => {
     setExpanded(true);
   }, []);
 
   return (
-    <>
-      <CollectionLink
-        depth={depth ? depth : 0}
-        collection={collection}
-        expanded={expanded}
-        activeDocument={documents.active}
-        onDisclosureClick={handleDisclosureClick}
-        onClick={handleClick}
-      />
-      <Relative>
-        <CollectionLinkChildren
-          collection={collection}
-          expanded={expanded}
-          prefetchDocument={documents.prefetchDocument}
-        />
-      </Relative>
-    </>
+    <CollectionLink
+      depth={depth ? depth : 0}
+      collection={collection}
+      expanded={expanded}
+      activeDocument={documents.active}
+      onDisclosureClick={handleDisclosureClick}
+      onClick={handleClick}
+    />
   );
 }

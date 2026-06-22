@@ -1,6 +1,7 @@
 import { Event } from "@server/models";
 import { buildDocument, buildUser } from "@server/test/factories";
-import { AuthenticationType, DocumentEvent } from "@server/types";
+import type { DocumentEvent } from "@server/types";
+import { AuthenticationType } from "@server/types";
 import revisionCreator from "./revisionCreator";
 
 describe("revisionCreator", () => {
@@ -13,6 +14,7 @@ describe("revisionCreator", () => {
     const revision = await revisionCreator({
       document,
       user,
+      collaboratorIds: [user.id],
       event: {
         name: "documents.update",
         authType: AuthenticationType.APP,
@@ -26,7 +28,6 @@ describe("revisionCreator", () => {
     expect(revision.createdAt).toEqual(document.updatedAt);
     expect(event!.name).toEqual("revisions.create");
     expect(event!.modelId).toEqual(revision.id);
-    expect(event!.createdAt).toEqual(document.updatedAt);
     expect(event!.authType).toEqual(AuthenticationType.APP);
   });
 });

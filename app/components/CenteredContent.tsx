@@ -1,6 +1,7 @@
 import * as React from "react";
 import styled from "styled-components";
 import breakpoint from "styled-components-breakpoint";
+import { EditorStyleHelper } from "@shared/editor/styles/EditorStyleHelper";
 
 type Props = {
   children?: React.ReactNode;
@@ -11,7 +12,7 @@ type Props = {
 const Container = styled.div<Props>`
   width: 100%;
   max-width: 100vw;
-  padding: ${(props) => (props.withStickyHeader ? "4px 12px" : "60px 12px")};
+  padding: ${(props) => (props.withStickyHeader ? "4px 16px" : "60px 16px")};
 
   ${breakpoint("tablet")`
     padding: ${(props: Props) =>
@@ -22,12 +23,9 @@ const Container = styled.div<Props>`
 type ContentProps = { $maxWidth?: string };
 
 const Content = styled.div<ContentProps>`
-  max-width: ${(props) => props.$maxWidth ?? "46em"};
+  max-width: ${(props: ContentProps) =>
+    props.$maxWidth ?? EditorStyleHelper.documentWidth};
   margin: 0 auto;
-
-  ${breakpoint("desktopLarge")`
-    max-width: ${(props: ContentProps) => props.$maxWidth ?? "52em"};
-  `};
 `;
 
 const CenteredContent: React.FC<Props> = ({

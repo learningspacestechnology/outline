@@ -1,19 +1,22 @@
 import { observer } from "mobx-react";
 import { DocumentIcon } from "outline-icons";
-import * as React from "react";
 import { Link } from "react-router-dom";
 import styled from "styled-components";
 import Icon from "@shared/components/Icon";
 import { s, hover, ellipsis } from "@shared/styles";
-import { IconType, NavigationNode } from "@shared/types";
+import type { NavigationNode } from "@shared/types";
+import { IconType } from "@shared/types";
 import { determineIconType } from "@shared/utils/icon";
+import useShare from "@shared/hooks/useShare";
 import Document from "~/models/Document";
 import Flex from "~/components/Flex";
-import { SidebarContextType } from "~/components/Sidebar/components/SidebarContext";
-import { sharedDocumentPath } from "~/utils/routeHelpers";
+import type { SidebarContextType } from "~/components/Sidebar/components/SidebarContext";
+import { sharedModelPath } from "~/utils/routeHelpers";
+import useClickIntent from "~/hooks/useClickIntent";
+import useStores from "~/hooks/useStores";
+import { useCallback } from "react";
 
 type Props = {
-  shareId?: string;
   document: Document | NavigationNode;
   anchor?: string;
   showCollection?: boolean;
@@ -57,38 +60,49 @@ function ReferenceListItem({
   document,
   showCollection,
   anchor,
-  shareId,
   sidebarContext,
   ...rest
 }: Props) {
+  const { documents } = useStores();
+  const { shareId } = useShare();
+  const prefetchDocument = useCallback(async () => {
+    await documents.prefetchDocument(document.id);
+  }, [documents, document.id]);
+  const { handleMouseEnter, handleMouseLeave } =
+    useClickIntent(prefetchDocument);
   const { icon, color } = document;
   const isEmoji = determineIconType(icon) === IconType.Emoji;
   const title =
     document instanceof Document ? document.titleWithDefault : document.title;
+  const initial = title.charAt(0).toUpperCase();
 
   return (
-    <DocumentLink
-      to={{
-        pathname: shareId
-          ? sharedDocumentPath(shareId, document.url)
-          : document.url,
-        hash: anchor ? `d-${anchor}` : undefined,
-        state: {
-          title: document.title,
-          sidebarContext,
-        },
-      }}
-      {...rest}
-    >
-      <Content gap={4} dir="auto">
-        {icon ? (
-          <Icon value={icon} color={color ?? undefined} />
-        ) : (
-          <DocumentIcon />
-        )}
-        <Title>{isEmoji ? title.replace(icon!, "") : title}</Title>
-      </Content>
-    </DocumentLink>
+    <li>
+      <DocumentLink
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        to={{
+          pathname: shareId
+            ? sharedModelPath(shareId, document.url)
+            : document.url,
+          hash: anchor ? `d-${anchor}` : undefined,
+          state: {
+            title: document.title,
+            sidebarContext,
+          },
+        }}
+        {...rest}
+      >
+        <Content gap={4} dir="auto">
+          {icon ? (
+            <Icon value={icon} color={color ?? undefined} initial={initial} />
+          ) : (
+            <DocumentIcon />
+          )}
+          <Title>{isEmoji ? title.replace(icon!, "") : title}</Title>
+        </Content>
+      </DocumentLink>
+    </li>
   );
 }
 

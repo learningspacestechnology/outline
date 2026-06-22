@@ -1,3 +1,5 @@
+import * as RadixSwitch from "@radix-ui/react-switch";
+import { darken } from "polished";
 import * as React from "react";
 import styled from "styled-components";
 import { s } from "@shared/styles";
@@ -5,7 +7,10 @@ import { LabelText } from "~/components/Input";
 import Text from "~/components/Text";
 import { undraggableOnDesktop } from "~/styles";
 
-interface Props extends React.HTMLAttributes<HTMLInputElement> {
+interface Props extends Omit<
+  React.ComponentProps<typeof RadixSwitch.Root>,
+  "checked" | "onCheckedChange" | "onChange"
+> {
   /** Width of the switch. Defaults to 32. */
   width?: number;
   /** Height of the switch. Defaults to 18 */
@@ -22,6 +27,9 @@ interface Props extends React.HTMLAttributes<HTMLInputElement> {
   checked?: boolean;
   /** Whether the switch is disabled */
   disabled?: boolean;
+  /** Callback when the switch state changes */
+  onChange?: (checked: boolean) => void;
+  inForm?: boolean;
 }
 
 function Switch(
@@ -29,35 +37,44 @@ function Switch(
     width = 32,
     height = 18,
     labelPosition = "left",
+    inForm = true,
     label,
     disabled,
     className,
     note,
+    checked,
+    onChange,
     ...props
   }: Props,
-  ref: React.Ref<HTMLInputElement>
+  ref: React.Ref<React.ElementRef<typeof RadixSwitch.Root>>
 ) {
+  const handleCheckedChange = React.useCallback(
+    (checkedState: boolean) => {
+      if (onChange) {
+        onChange(checkedState);
+      }
+    },
+    [onChange]
+  );
+
   const component = (
-    <Input
+    <StyledSwitchRoot
+      ref={ref}
+      checked={checked}
+      onCheckedChange={handleCheckedChange}
+      disabled={disabled}
       width={width}
       height={height}
       className={label ? undefined : className}
+      {...props}
     >
-      <HiddenInput
-        ref={ref}
-        type="checkbox"
-        width={width}
-        height={height}
-        disabled={disabled}
-        {...props}
-      />
-      <Slider width={width} height={height} />
-    </Input>
+      <StyledSwitchThumb width={width} height={height} />
+    </StyledSwitchRoot>
   );
 
   if (label) {
     return (
-      <Wrapper>
+      <Wrapper $inForm={inForm}>
         <Label
           disabled={disabled}
           htmlFor={props.id}
@@ -86,8 +103,8 @@ function Switch(
   return component;
 }
 
-const Wrapper = styled.div`
-  padding-bottom: 8px;
+const Wrapper = styled.div<{ $inForm?: boolean }>`
+  padding-bottom: ${(props) => (props.$inForm ? 8 : 0)}px;
   ${undraggableOnDesktop()}
 `;
 
@@ -110,61 +127,85 @@ const Label = styled.label<{
   ${(props) => (props.disabled ? `opacity: 0.75;` : "")}
 `;
 
-const Input = styled.label<{ width: number; height: number }>`
-  position: relative;
-  display: inline-block;
-  width: ${(props) => props.width}px;
-  height: ${(props) => props.height}px;
-  flex-shrink: 0;
-`;
+const HOVER_EXTRA = 3;
 
-const Slider = styled.span<{ width: number; height: number }>`
-  position: absolute;
-  cursor: var(--pointer);
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: ${(props) => props.theme.slate};
-  -webkit-transition: 0.4s;
-  transition: 0.4s;
-  border-radius: ${(props) => props.height}px;
+const StyledSwitchThumb = styled(RadixSwitch.Thumb)<{
+  width: number;
+  height: number;
+}>`
+  display: block;
+  width: ${(props) => props.height - 8}px;
+  height: ${(props) => props.height - 8}px;
+  background-color: white;
+  border-radius: ${(props) => (props.height - 8) / 2}px;
+  transition:
+    transform 0.2s,
+    width 0.2s;
+  transform: translateX(0);
+  will-change: transform, width;
 
-  &:before {
-    position: absolute;
-    content: "";
-    height: ${(props) => props.height - 8}px;
-    width: ${(props) => props.height - 8}px;
-    left: 4px;
-    bottom: 4px;
-    background-color: white;
-    border-radius: 50%;
-    -webkit-transition: 0.4s;
-    transition: 0.4s;
+  &[data-state="checked"] {
+    transform: translateX(${(props) => props.width - props.height}px);
+  }
+
+  [dir="rtl"] &[data-state="checked"] {
+    transform: translateX(${(props) => -(props.width - props.height)}px);
   }
 `;
 
-const HiddenInput = styled.input<{ width: number; height: number }>`
-  opacity: 0;
-  width: 0;
-  height: 0;
-  visibility: hidden;
+const StyledSwitchRoot = styled(RadixSwitch.Root)<{
+  width: number;
+  height: number;
+}>`
+  position: relative;
+  width: ${(props) => props.width}px;
+  height: ${(props) => props.height}px;
+  background-color: ${(props) => props.theme.slate};
+  border-radius: ${(props) => props.height}px;
+  border: none;
+  cursor: var(--pointer);
+  transition: background-color 0.2s;
+  padding: 0 4px;
+  flex-shrink: 0;
 
-  &:disabled + ${Slider} {
+  &:focus {
+    box-shadow: 0 0 1px ${s("accent")};
+    outline: none;
+  }
+
+  &[data-state="checked"] {
+    background-color: ${s("accent")};
+  }
+
+  &:active:not(:disabled) {
+    background-color: ${(props) => darken(0.1, props.theme.slate)};
+  }
+
+  &:active:not(:disabled)[data-state="checked"] {
+    background-color: ${(props) => darken(0.1, props.theme.accent)};
+  }
+
+  &:disabled {
     opacity: 0.75;
     cursor: default;
   }
 
-  &:checked + ${Slider} {
-    background-color: ${s("accent")};
+  &:hover:not(:disabled) ${StyledSwitchThumb} {
+    width: ${(props) => props.height - 8 + HOVER_EXTRA}px;
   }
 
-  &:focus + ${Slider} {
-    box-shadow: 0 0 1px ${s("accent")};
+  &:hover:not(:disabled)[data-state="checked"] ${StyledSwitchThumb} {
+    transform: translateX(
+      ${(props) => props.width - props.height - HOVER_EXTRA}px
+    );
   }
 
-  &:checked + ${Slider}:before {
-    transform: translateX(${(props) => props.width - props.height}px);
+  [dir="rtl"]
+    &:hover:not(:disabled)[data-state="checked"]
+    ${StyledSwitchThumb} {
+    transform: translateX(
+      ${(props) => -(props.width - props.height - HOVER_EXTRA)}px
+    );
   }
 `;
 

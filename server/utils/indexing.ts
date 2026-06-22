@@ -1,5 +1,5 @@
 import fractionalIndex from "fractional-index";
-import { FindOptions } from "sequelize";
+import type { FindOptions } from "sequelize";
 import naturalSort from "@shared/utils/naturalSort";
 import { Collection, Document, Star } from "@server/models";
 
@@ -10,10 +10,7 @@ export async function collectionIndexing(
   const collections = await Collection.findAll({
     where: {
       teamId,
-      // no point in maintaining index of deleted collections.
-      deletedAt: null,
     },
-    attributes: ["id", "index", "name"],
     transaction,
   });
 
@@ -26,7 +23,9 @@ export async function collectionIndexing(
   for (const collection of sortable) {
     if (collection.index === null) {
       collection.index = fractionalIndex(previousIndex, null);
-      promises.push(collection.save({ fields: ["index"], transaction })); // save only index to prevent overwriting other unfetched fields.
+      promises.push(
+        collection.save({ fields: ["index"], silent: true, transaction })
+      );
     }
 
     previousIndex = collection.index;
@@ -67,7 +66,7 @@ export async function starIndexing(userId: string) {
   for (const star of sortable) {
     if (star.index === null) {
       star.index = fractionalIndex(previousIndex, null);
-      promises.push(star.save());
+      promises.push(star.save({ silent: true }));
     }
 
     previousIndex = star.index;

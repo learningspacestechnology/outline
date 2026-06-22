@@ -41,19 +41,14 @@ describe("groupMemberships.list", () => {
       createdById: user.id,
     });
 
-    await server.post("/api/documents.add_group", {
+    await server.post("/api/documents.add_group", user, {
       body: {
-        token: user.getJwtToken(),
         id: document.id,
         groupId: group.id,
       },
     });
 
-    const res = await server.post("/api/groupMemberships.list", {
-      body: {
-        token: member.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/groupMemberships.list", member);
     const body = await res.json();
     expect(res.status).toEqual(200);
     expect(body.data).not.toBeFalsy();
@@ -66,5 +61,60 @@ describe("groupMemberships.list", () => {
     expect(sharedDoc.id).toEqual(body.data.groupMemberships[0].documentId);
     expect(body.data.groupMemberships[0].groupId).toEqual(group.id);
     expect(body.policies).not.toBeFalsy();
+  });
+
+  it("should return total count in pagination", async () => {
+    const user = await buildUser();
+    const collection = await buildCollection({
+      teamId: user.teamId,
+      createdById: user.id,
+      permission: null,
+    });
+    const group = await buildGroup({
+      teamId: user.teamId,
+    });
+    const member = await buildUser({
+      teamId: user.teamId,
+    });
+    await GroupUser.create({
+      groupId: group.id,
+      userId: member.id,
+      createdById: user.id,
+    });
+
+    // Create 3 documents and share them with the group
+    const documents = await Promise.all([
+      buildDocument({
+        collectionId: collection.id,
+        createdById: user.id,
+        teamId: user.teamId,
+      }),
+      buildDocument({
+        collectionId: collection.id,
+        createdById: user.id,
+        teamId: user.teamId,
+      }),
+      buildDocument({
+        collectionId: collection.id,
+        createdById: user.id,
+        teamId: user.teamId,
+      }),
+    ]);
+
+    for (const document of documents) {
+      await server.post("/api/documents.add_group", user, {
+        body: {
+          id: document.id,
+          groupId: group.id,
+        },
+      });
+    }
+
+    const res = await server.post("/api/groupMemberships.list", member);
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.pagination).not.toBeFalsy();
+    expect(body.pagination.total).toEqual(3);
+    expect(body.data.groupMemberships).toHaveLength(3);
   });
 });

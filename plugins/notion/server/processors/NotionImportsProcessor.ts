@@ -1,7 +1,8 @@
-import { Transaction } from "sequelize";
-import { NotionImportInput, NotionImportTaskInput } from "@shared/schema";
+import type { Transaction } from "sequelize";
+import type { NotionImportInput, NotionImportTaskInput } from "@shared/schema";
 import { IntegrationService } from "@shared/types";
-import { Import, ImportTask, Integration } from "@server/models";
+import type { Import, ImportTask } from "@server/models";
+import { Integration } from "@server/models";
 import ImportsProcessor from "@server/queues/processors/ImportsProcessor";
 import { NotionClient } from "../notion";
 import NotionAPIImportTask from "../tasks/NotionAPIImportTask";
@@ -29,6 +30,10 @@ export class NotionImportsProcessor extends ImportsProcessor<IntegrationService.
     importModel: Import<IntegrationService.Notion>,
     transaction: Transaction
   ): Promise<NotionImportTaskInput> {
+    if (!importModel.integrationId) {
+      throw new Error("Notion import is missing integrationId");
+    }
+
     const integration = await Integration.scope("withAuthentication").findByPk(
       importModel.integrationId,
       { rejectOnEmpty: true }
@@ -66,6 +71,6 @@ export class NotionImportsProcessor extends ImportsProcessor<IntegrationService.
   protected async scheduleTask(
     importTask: ImportTask<IntegrationService.Notion>
   ): Promise<void> {
-    await NotionAPIImportTask.schedule({ importTaskId: importTask.id });
+    await new NotionAPIImportTask().schedule({ importTaskId: importTask.id });
   }
 }

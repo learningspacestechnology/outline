@@ -1,9 +1,8 @@
 import { PlusIcon } from "outline-icons";
-import * as React from "react";
-import { UserRole } from "@shared/types";
+import type { UserRole } from "@shared/types";
 import { UserRoleHelper } from "@shared/utils/UserRoleHelper";
 import stores from "~/stores";
-import User from "~/models/User";
+import type User from "~/models/User";
 import Invite from "~/scenes/Invite";
 import {
   UserChangeRoleDialog,
@@ -23,6 +22,7 @@ export const inviteUser = createAction({
   perform: ({ t }) => {
     stores.dialogs.openModal({
       title: t("Invite to workspace"),
+      width: "500px",
       content: <Invite onSubmit={stores.dialogs.closeAllModals} />,
     });
   },
@@ -46,8 +46,8 @@ export const updateUserRoleActionFactory = (user: User, role: UserRole) =>
       return UserRoleHelper.isRoleHigher(role, user.role)
         ? can.promote
         : UserRoleHelper.isRoleLower(role, user.role)
-        ? can.demote
-        : false;
+          ? can.demote
+          : false;
     },
     perform: ({ t }) => {
       stores.dialogs.openModal({

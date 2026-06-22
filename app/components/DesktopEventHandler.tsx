@@ -1,4 +1,4 @@
-import * as React from "react";
+import { useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useHistory } from "react-router-dom";
 import { toast } from "sonner";
@@ -12,10 +12,10 @@ export default function DesktopEventHandler() {
   const { t } = useTranslation();
   const history = useHistory();
   const { dialogs } = useStores();
-  const hasDisabledUpdateMessage = React.useRef(false);
+  const hasDisabledUpdateMessage = useRef(false);
 
-  React.useEffect(() => {
-    Desktop.bridge?.redirect((path: string, replace = false) => {
+  useEffect(() => {
+    Desktop.bridge?.redirect((path: string, replace: boolean) => {
       if (replace) {
         history.replace(path);
       } else {

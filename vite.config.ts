@@ -1,14 +1,14 @@
-import fs from "fs";
-import path from "path";
-import react from "@vitejs/plugin-react";
+import fs from "node:fs";
+import path from "node:path";
+import react from "@vitejs/plugin-react-oxc";
 import browserslistToEsbuild from "browserslist-to-esbuild";
 import webpackStats from "rollup-plugin-webpack-stats";
-import { CommonServerOptions, defineConfig } from "vite";
+import type { ServerOptions } from "vite";
+import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
-import { viteStaticCopy } from "vite-plugin-static-copy";
 import environment from "./server/utils/environment";
 
-let httpsConfig: CommonServerOptions["https"] | undefined;
+let httpsConfig: ServerOptions["https"] | undefined;
 let host: string | undefined;
 
 if (environment.NODE_ENV === "development") {
@@ -19,8 +19,8 @@ if (environment.NODE_ENV === "development") {
       key: fs.readFileSync("./server/config/certs/private.key"),
       cert: fs.readFileSync("./server/config/certs/public.cert"),
     };
-  } catch (err) {
-    // eslint-disable-next-line no-console
+  } catch (_err) {
+    // oxlint-disable-next-line no-console
     console.warn("No local SSL certs found, HTTPS will not be available");
   }
 }
@@ -45,44 +45,7 @@ export default () =>
           : { strict: true },
     },
     plugins: [
-      // https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#readme
-      react({
-        babel: {
-          env: {
-            production: {
-              plugins: [
-                [
-                  "babel-plugin-styled-components",
-                  {
-                    displayName: false,
-                  },
-                ],
-              ],
-            },
-          },
-          plugins: [
-            [
-              "babel-plugin-styled-components",
-              {
-                displayName: true,
-                fileName: false,
-              },
-            ],
-          ],
-          parserOpts: {
-            plugins: ["decorators-legacy", "classProperties"],
-          },
-        },
-      }),
-      // https://github.com/sapphi-red/vite-plugin-static-copy#readme
-      viteStaticCopy({
-        targets: [
-          {
-            src: "./public/images",
-            dest: "./",
-          },
-        ],
-      }),
+      react(),
       // https://vite-pwa-org.netlify.app/
       VitePWA({
         injectRegister: "inline",
@@ -94,6 +57,9 @@ export default () =>
           modifyURLPrefix: {
             "": `${environment.CDN_URL ?? ""}/static/`,
           },
+          skipWaiting: true,
+          clientsClaim: true,
+          cleanupOutdatedCaches: true,
           runtimeCaching: [
             {
               urlPattern: /api\/urls\.unfurl$/,
@@ -107,6 +73,21 @@ export default () =>
                 cacheableResponse: {
                   statuses: [0, 200],
                 },
+              },
+            },
+            {
+              urlPattern: /api\/files\.get/,
+              handler: "CacheFirst",
+              options: {
+                cacheName: "files-cache",
+                expiration: {
+                  maxEntries: 50,
+                  maxAgeSeconds: 604800, // 7 days
+                },
+                cacheableResponse: {
+                  statuses: [0, 200, 206], // Include partial content for range requests
+                },
+                rangeRequests: true, // Allow range requests for partial content
               },
             },
           ],
@@ -125,21 +106,44 @@ export default () =>
           // pixel-perfection, provide icons in increments of 48dp.
           icons: [
             {
-              src: "/static/images/icon-192.png",
+              src: "/images/icon-192.png",
               sizes: "192x192",
               type: "image/png",
             },
             {
-              src: "/static/images/icon-512.png",
+              src: "/images/icon-512.png",
               sizes: "512x512",
               type: "image/png",
             },
-            // last one duplicated for purpose: 'any maskable'
             {
-              src: "/static/images/icon-512.png",
+              src: "/images/icon-maskable-192.png",
+              sizes: "192x192",
+              type: "image/png",
+              purpose: "maskable",
+            },
+            {
+              src: "/images/icon-maskable-512.png",
               sizes: "512x512",
               type: "image/png",
-              purpose: "any maskable",
+              purpose: "maskable",
+            },
+            {
+              src: "/images/icon-maskable-1024.png",
+              sizes: "1024x1024",
+              type: "image/png",
+              purpose: "maskable",
+            },
+            {
+              src: "/images/icon-monochrome-512.png",
+              sizes: "512x512",
+              type: "image/png",
+              purpose: "monochrome",
+            },
+            {
+              src: "/images/icon-monochrome-1024.png",
+              sizes: "1024x1024",
+              type: "image/png",
+              purpose: "monochrome",
             },
           ],
         },
@@ -147,13 +151,8 @@ export default () =>
       // Generate a stats.json file for webpack that will be consumed by RelativeCI
       webpackStats(),
     ],
-    optimizeDeps: {
-      esbuildOptions: {
-        keepNames: true,
-        define: {
-          global: "globalThis",
-        },
-      },
+    experimental: {
+      enableNativePlugin: true,
     },
     resolve: {
       alias: {
@@ -165,16 +164,19 @@ export default () =>
       outDir: "./build/app",
       manifest: true,
       sourcemap: process.env.CI ? false : "hidden",
-      minify: "terser",
-      // Prevent asset inling as it does not conform to CSP rules
+      minify: "oxc",
+      // Prevent asset inlining as it does not conform to CSP rules
       assetsInlineLimit: 0,
       target: browserslistToEsbuild(),
       reportCompressedSize: false,
-      terserOptions: {
-        keep_classnames: true,
-        keep_fnames: true,
-      },
       rollupOptions: {
+        onwarn(warning, warn) {
+          // Suppress noisy warnings about module-level directives, e.g. "use client"
+          if (warning.code === "MODULE_LEVEL_DIRECTIVE") {
+            return;
+          }
+          warn(warning);
+        },
         input: {
           index: "./app/index.tsx",
         },
@@ -182,6 +184,77 @@ export default () =>
           assetFileNames: "assets/[name].[hash][extname]",
           chunkFileNames: "assets/[name].[hash].js",
           entryFileNames: "assets/[name].[hash].js",
+          advancedChunks: {
+            groups: [
+              // Shared utilities used across the app — higher priority
+              // prevents them being absorbed into lazy vendor chunks
+              {
+                name: "vendor-shared",
+                test: /node_modules[\\/]uuid|vite[\\/]preload-helper/,
+                priority: 30,
+              },
+              {
+                name: "vendor-react",
+                test: /node_modules[\\/](react|react-dom|scheduler|react-router)/,
+                priority: 20,
+              },
+              {
+                name: "vendor-prosemirror",
+                test: /node_modules[\\/](@benrbray[\\/])?prosemirror/,
+                priority: 20,
+              },
+              {
+                name: "vendor-collab",
+                test: /node_modules[\\/](yjs|y-prosemirror|y-indexeddb|@hocuspocus|lib0)/,
+                priority: 20,
+              },
+              {
+                name: "vendor-framer-motion",
+                test: /node_modules[\\/]framer-motion/,
+                priority: 20,
+              },
+              {
+                name: "vendor-styled",
+                test: /node_modules[\\/]styled-components/,
+                priority: 20,
+              },
+              {
+                name: "vendor-mermaid-elk",
+                test: /node_modules[\\/](@mermaid-js[\\/]layout-elk|elkjs)/,
+                priority: 25,
+              },
+              {
+                name: "vendor-mermaid",
+                test: /node_modules[\\/](mermaid|cytoscape|cytoscape-fcose|layout-base|dagre-d3-es|langium|chevrotain|roughjs|@mermaid-js)/,
+                priority: 20,
+              },
+              {
+                name: "vendor-katex",
+                test: /node_modules[\\/]katex/,
+                priority: 20,
+              },
+              {
+                name: "vendor-emoji",
+                test: /node_modules[\\/](@emoji-mart|emoji-mart)/,
+                priority: 20,
+              },
+              {
+                name: "vendor-es-toolkit",
+                test: /node_modules[\\/]es-toolkit/,
+                priority: 20,
+              },
+              {
+                name: "vendor-date",
+                test: /node_modules[\\/]date-fns/,
+                priority: 20,
+              },
+              {
+                name: "vendor-sentry",
+                test: /node_modules[\\/]@sentry/,
+                priority: 20,
+              },
+            ],
+          },
         },
       },
     },

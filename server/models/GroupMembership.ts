@@ -1,6 +1,5 @@
+import type { InferAttributes, InferCreationAttributes } from "sequelize";
 import {
-  InferAttributes,
-  InferCreationAttributes,
   Op,
   type SaveOptions,
   type FindOptions,
@@ -22,9 +21,10 @@ import {
   BeforeDestroy,
   BeforeUpdate,
 } from "sequelize-typescript";
-import { CollectionPermission, DocumentPermission } from "@shared/types";
+import type { DocumentPermission } from "@shared/types";
+import { CollectionPermission } from "@shared/types";
 import { ValidationError } from "@server/errors";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
 import Collection from "./Collection";
 import Document from "./Document";
 import Group from "./Group";
@@ -192,7 +192,7 @@ class GroupMembership extends ParanoidModel<
       memberships.map((membership) =>
         membership?.sourceId
           ? this.findByPk(membership.sourceId, options)
-          : membership
+          : Promise.resolve(membership)
       )
     );
 
@@ -204,7 +204,7 @@ class GroupMembership extends ParanoidModel<
   @AfterCreate
   static async createSourcedMemberships(
     model: GroupMembership,
-    options: SaveOptions<GroupMembership>
+    options: SaveOptions<GroupMembership> & { documentId?: string }
   ) {
     if (model.sourceId || !model.documentId) {
       return;
@@ -326,27 +326,19 @@ class GroupMembership extends ParanoidModel<
    */
   static async recreateSourcedMemberships(
     model: GroupMembership,
-    options: SaveOptions<GroupMembership>
+    options: SaveOptions<GroupMembership> & { documentId?: string }
   ) {
     if (!model.documentId) {
       return;
     }
-    const { transaction } = options;
-
-    await this.destroy({
-      where: {
-        groupId: model.groupId,
-        sourceId: model.id,
-      },
-      transaction,
-    });
+    const { transaction, documentId } = options;
 
     const document = await Document.unscoped()
       .scope("withoutState")
       .findOne({
         attributes: ["id"],
         where: {
-          id: model.documentId,
+          id: documentId ?? model.documentId,
         },
         transaction,
       });
@@ -354,16 +346,32 @@ class GroupMembership extends ParanoidModel<
       return;
     }
 
-    const childDocumentIds = await document.findAllChildDocumentIds(
-      {
-        publishedAt: {
-          [Op.ne]: null,
+    const childDocumentIds = [
+      ...(documentId ? [documentId] : []),
+      ...(await document.findAllChildDocumentIds(
+        {
+          publishedAt: {
+            [Op.ne]: null,
+          },
         },
-      },
-      {
+        {
+          transaction,
+        }
+      )),
+    ];
+
+    if (childDocumentIds.length) {
+      await this.destroy({
+        where: {
+          groupId: model.groupId,
+          sourceId: model.id,
+          documentId: {
+            [Op.in]: childDocumentIds,
+          },
+        },
         transaction,
-      }
-    );
+      });
+    }
 
     for (const childDocumentId of childDocumentIds) {
       await this.create(
@@ -391,7 +399,7 @@ class GroupMembership extends ParanoidModel<
   ) {
     const hookContext = {
       ...ctx,
-      event: { name, data, create: true },
+      event: { name, data, publish: true },
     } as HookContext;
 
     if (this.collectionId) {

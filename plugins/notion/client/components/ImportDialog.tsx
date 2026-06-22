@@ -1,11 +1,13 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { ImportInput } from "@shared/schema";
-import { CollectionPermission, IntegrationService } from "@shared/types";
+import { errToString } from "@shared/utils/error";
+import type { ImportInput } from "@shared/schema";
+import type { CollectionPermission } from "@shared/types";
+import { IntegrationService } from "@shared/types";
 import Button from "~/components/Button";
 import Flex from "~/components/Flex";
-import InputSelectPermission from "~/components/InputSelectPermission";
+import { InputSelectPermission } from "~/components/InputSelectPermission";
 import Text from "~/components/Text";
 import useBoolean from "~/hooks/useBoolean";
 import useStores from "~/hooks/useStores";
@@ -49,10 +51,18 @@ export function ImportDialog({ integrationId, onSubmit }: Props) {
 
       onSubmit();
     } catch (err) {
-      toast.error(err.message);
+      toast.error(errToString(err));
       resetSubmitting();
     }
-  }, [permission, onSubmit]);
+  }, [
+    permission,
+    onSubmit,
+    integrationId,
+    t,
+    imports,
+    resetSubmitting,
+    setSubmitting,
+  ]);
 
   return (
     <Flex column gap={12}>
@@ -70,7 +80,7 @@ export function ImportDialog({ integrationId, onSubmit }: Props) {
       </div>
       <Flex justify="flex-end">
         <Button onClick={handleStartImport} disabled={submitting}>
-          {t("Start import")}
+          {submitting ? t("Uploading") + "…" : t("Start import")}
         </Button>
       </Flex>
     </Flex>

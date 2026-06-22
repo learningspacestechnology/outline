@@ -1,41 +1,58 @@
 import { differenceInMinutes, formatDistanceToNowStrict } from "date-fns";
 import { t } from "i18next";
-import { UnfurlResourceType, UnfurlResponse } from "@shared/types";
+import type { UnfurlResponse } from "@shared/types";
+import { UnfurlResourceType } from "@shared/types";
 import { dateLocale } from "@shared/utils/date";
-import { Document, User, View } from "@server/models";
+import type { Document, User, Group } from "@server/models";
+import { View } from "@server/models";
 import { opts } from "@server/utils/i18n";
-import { GitHubUtils } from "plugins/github/shared/GitHubUtils";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- heterogeneous payload from internal callers and third-party unfurl plugins.
+type UnfurlData = Record<string, any>;
 
 async function presentUnfurl(
-  data: Record<string, any>,
+  data: UnfurlData,
   options?: { includeEmail: boolean }
 ) {
   switch (data.type) {
     case UnfurlResourceType.Mention:
       return presentMention(data, options);
+    case UnfurlResourceType.Group:
+      return presentGroup(data);
     case UnfurlResourceType.Document:
       return presentDocument(data);
     case UnfurlResourceType.PR:
       return presentPR(data);
     case UnfurlResourceType.Issue:
       return presentIssue(data);
+    case UnfurlResourceType.Project:
+      return presentProject(data);
     default:
-      return presentOEmbed(data);
+      return presentURL(data);
   }
 }
 
-const presentOEmbed = (
-  data: Record<string, any>
-): UnfurlResponse[UnfurlResourceType.OEmbed] => ({
-  type: UnfurlResourceType.OEmbed,
-  url: data.url,
-  title: data.title,
-  description: data.description,
-  thumbnailUrl: data.thumbnail_url,
-});
+const presentURL = (
+  data: UnfurlData
+): UnfurlResponse[UnfurlResourceType.URL] => {
+  // TODO: For backwards compatibility, remove once cache has expired in next release.
+  if (data.transformedUnfurl) {
+    delete data.transformedUnfurl;
+    return data as UnfurlResponse[UnfurlResourceType.URL]; // this would have been transformed by the unfurl plugin.
+  }
+
+  return {
+    type: UnfurlResourceType.URL,
+    url: data.url,
+    title: data.meta.title,
+    description: data.meta.description,
+    thumbnailUrl: (data.links.thumbnail ?? [])[0]?.href ?? "",
+    faviconUrl: (data.links.icon ?? [])[0]?.href ?? "",
+  };
+};
 
 const presentMention = async (
-  data: Record<string, any>,
+  data: UnfurlData,
   options?: { includeEmail: boolean }
 ): Promise<UnfurlResponse[UnfurlResourceType.Mention]> => {
   const user: User = data.user;
@@ -54,64 +71,56 @@ const presentMention = async (
   };
 };
 
+const presentGroup = async (
+  data: UnfurlData
+): Promise<UnfurlResponse[UnfurlResourceType.Group]> => {
+  const group: Group = data.group;
+  const memberCount = await group.memberCount;
+
+  return {
+    type: UnfurlResourceType.Group,
+    name: group.name,
+    description: group.description,
+    memberCount,
+    users: (data.users as User[]).map((user) => ({
+      id: user.id,
+      name: user.name,
+      avatarUrl: user.avatarUrl,
+      color: user.color,
+    })),
+  };
+};
+
 const presentDocument = (
-  data: Record<string, any>
+  data: UnfurlData
 ): UnfurlResponse[UnfurlResourceType.Document] => {
   const document: Document = data.document;
-  const viewer: User = data.viewer;
+  const viewer: User | undefined = data.viewer;
+  const url: string | undefined = data.url;
   return {
-    url: document.url,
+    url: url ?? document.url,
     type: UnfurlResourceType.Document,
     id: document.id,
     title: document.titleWithDefault,
     summary: document.getSummary(),
-    lastActivityByViewer: presentLastActivityInfoFor(document, viewer),
+    lastActivityByViewer: viewer
+      ? presentLastActivityInfoFor(document, viewer)
+      : undefined,
   };
 };
 
-const presentPR = (
-  data: Record<string, any>
-): UnfurlResponse[UnfurlResourceType.PR] => ({
-  url: data.html_url,
-  type: UnfurlResourceType.PR,
-  id: `#${data.number}`,
-  title: data.title,
-  description: data.body,
-  author: {
-    name: data.user.login,
-    avatarUrl: data.user.avatar_url,
-  },
-  state: {
-    name: data.merged ? "merged" : data.state,
-    color: GitHubUtils.getColorForStatus(data.merged ? "merged" : data.state),
-  },
-  createdAt: data.created_at,
-});
+const presentPR = (data: UnfurlData): UnfurlResponse[UnfurlResourceType.PR] =>
+  data as UnfurlResponse[UnfurlResourceType.PR]; // this would have been transformed by the unfurl plugin.
 
 const presentIssue = (
-  data: Record<string, any>
-): UnfurlResponse[UnfurlResourceType.Issue] => ({
-  url: data.html_url,
-  type: UnfurlResourceType.Issue,
-  id: `#${data.number}`,
-  title: data.title,
-  description: data.body_text,
-  author: {
-    name: data.user.login,
-    avatarUrl: data.user.avatar_url,
-  },
-  labels: data.labels.map((label: { name: string; color: string }) => ({
-    name: label.name,
-    color: `#${label.color}`,
-  })),
-  state: {
-    name: data.state,
-    color: GitHubUtils.getColorForStatus(
-      data.state === "closed" ? "done" : data.state
-    ),
-  },
-  createdAt: data.created_at,
-});
+  data: UnfurlData
+): UnfurlResponse[UnfurlResourceType.Issue] =>
+  data as UnfurlResponse[UnfurlResourceType.Issue]; // this would have been transformed by the unfurl plugin.
+
+const presentProject = (
+  data: UnfurlData
+): UnfurlResponse[UnfurlResourceType.Project] =>
+  data as UnfurlResponse[UnfurlResourceType.Project]; // this would have been transformed by the unfurl plugin.
 
 const presentLastOnlineInfoFor = (user: User) => {
   const locale = dateLocale(user.language);

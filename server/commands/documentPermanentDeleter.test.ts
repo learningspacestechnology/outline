@@ -1,12 +1,11 @@
 import { subDays } from "date-fns";
+import { errToString } from "@shared/utils/error";
 import { Attachment, Document } from "@server/models";
-import DeleteAttachmentTask from "@server/queues/tasks/DeleteAttachmentTask";
 import { buildAttachment, buildDocument } from "@server/test/factories";
+import { mockTaskSchedule } from "@server/test/support";
 import documentPermanentDeleter from "./documentPermanentDeleter";
 
-jest.mock("@server/queues/tasks/DeleteAttachmentTask", () => ({
-  schedule: jest.fn(),
-}));
+const schedule = mockTaskSchedule();
 
 describe("documentPermanentDeleter", () => {
   it("should destroy documents", async () => {
@@ -35,7 +34,7 @@ describe("documentPermanentDeleter", () => {
     try {
       await documentPermanentDeleter([document]);
     } catch (err) {
-      error = err.message;
+      error = errToString(err);
     }
 
     expect(error).toEqual(
@@ -60,7 +59,7 @@ describe("documentPermanentDeleter", () => {
     await document.save();
     const countDeletedDoc = await documentPermanentDeleter([document]);
     expect(countDeletedDoc).toEqual(1);
-    expect(DeleteAttachmentTask.schedule).toHaveBeenCalledTimes(2);
+    expect(schedule).toHaveBeenCalledTimes(2);
     expect(
       await Document.unscoped().count({
         where: {
@@ -105,6 +104,54 @@ describe("documentPermanentDeleter", () => {
         paranoid: false,
       })
     ).toEqual(0);
+  });
+
+  it("should not destroy a document restored between query and destroy", async () => {
+    const document = await buildDocument({
+      publishedAt: subDays(new Date(), 90),
+      deletedAt: subDays(new Date(), 60),
+    });
+
+    // Simulate the race: caller queried this document while it was soft-deleted,
+    // but the user restored it before documentPermanentDeleter runs the destroy.
+    await Document.unscoped().update(
+      { deletedAt: null },
+      { where: { id: document.id }, paranoid: false }
+    );
+
+    // The stale in-memory object still has deletedAt set (as it would in the
+    // real cleanup task flow), but the DB row is now active.
+    const countDeletedDoc = await documentPermanentDeleter([document]);
+    expect(countDeletedDoc).toEqual(0);
+
+    // Document must survive — it was restored.
+    expect(
+      await Document.unscoped().count({
+        where: { id: document.id },
+        paranoid: false,
+      })
+    ).toEqual(1);
+  });
+
+  it("should not detach children of a document restored between query and destroy", async () => {
+    const parent = await buildDocument({
+      publishedAt: subDays(new Date(), 90),
+      deletedAt: subDays(new Date(), 60),
+    });
+    const child = await buildDocument({
+      teamId: parent.teamId,
+      parentDocumentId: parent.id,
+    });
+
+    await Document.unscoped().update(
+      { deletedAt: null },
+      { where: { id: parent.id }, paranoid: false }
+    );
+
+    await documentPermanentDeleter([parent]);
+
+    await child.reload();
+    expect(child.parentDocumentId).toEqual(parent.id);
   });
 
   it("should not destroy attachments referenced in other documents", async () => {

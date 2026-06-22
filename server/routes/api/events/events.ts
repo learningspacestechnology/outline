@@ -1,13 +1,14 @@
 import Router from "koa-router";
-import intersection from "lodash/intersection";
-import { Op, WhereOptions } from "sequelize";
+import { intersection } from "es-toolkit/compat";
+import type { WhereOptions } from "sequelize";
+import { Op } from "sequelize";
 import { EventHelper } from "@shared/utils/EventHelper";
 import auth from "@server/middlewares/authentication";
 import validate from "@server/middlewares/validate";
-import { Event, User, Collection } from "@server/models";
+import { Event, User, Collection, Document } from "@server/models";
 import { authorize } from "@server/policies";
 import { presentEvent } from "@server/presenters";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
 
@@ -33,6 +34,7 @@ router.post(
 
     let where: WhereOptions<Event> = {
       teamId: user.teamId,
+      actorId: { [Op.ne]: null },
     };
 
     if (auditLog) {
@@ -51,37 +53,30 @@ router.post(
     }
 
     if (actorId) {
+      const actor = await User.findByPk(actorId);
+      authorize(user, "readDetails", actor);
       where = { ...where, actorId };
     }
 
+    // Non-admins must specify either documentId or collectionId to use the read policy
+    if (!user.isAdmin && !documentId && !collectionId) {
+      authorize(user, "listAllEvents", user.team);
+    }
+
     if (documentId) {
+      const document = await Document.findByPk(documentId, {
+        userId: user.id,
+      });
+      authorize(user, "read", document);
       where = { ...where, documentId };
     }
 
     if (collectionId) {
-      where = { ...where, collectionId };
-
-      const collection = await Collection.scope({
-        method: ["withMembership", user.id],
-      }).findByPk(collectionId);
-      authorize(user, "read", collection);
-    } else {
-      const collectionIds = await user.collectionIds({
-        paranoid: false,
+      const collection = await Collection.findByPk(collectionId, {
+        userId: user.id,
       });
-      where = {
-        ...where,
-        [Op.or]: [
-          {
-            collectionId: collectionIds,
-          },
-          {
-            collectionId: {
-              [Op.is]: null,
-            },
-          },
-        ],
-      };
+      authorize(user, "read", collection);
+      where = { ...where, collectionId };
     }
 
     const loadedEvents = await Event.findAll({
@@ -100,9 +95,7 @@ router.post(
 
     ctx.body = {
       pagination: ctx.state.pagination,
-      data: await Promise.all(
-        loadedEvents.map((event) => presentEvent(event, auditLog))
-      ),
+      data: loadedEvents.map((event) => presentEvent(event, auditLog)),
     };
   }
 );

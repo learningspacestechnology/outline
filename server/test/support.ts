@@ -1,13 +1,16 @@
 import { faker } from "@faker-js/faker";
-import { Transaction } from "sequelize";
+import type { Transaction } from "sequelize";
+import { afterEach, beforeEach, vi } from "vitest";
 import sharedEnv from "@shared/env";
 import { createContext } from "@server/context";
 import env from "@server/env";
-import { User } from "@server/models";
+import type { User } from "@server/models";
 import onerror from "@server/onerror";
+import { BaseTask } from "@server/queues/tasks/base/BaseTask";
 import webService from "@server/services/web";
 import { sequelize } from "@server/storage/database";
-import { APIContext, AuthenticationType } from "@server/types";
+import type { APIContext } from "@server/types";
+import { AuthenticationType } from "@server/types";
 import TestServer from "./TestServer";
 
 export function getTestServer() {
@@ -32,6 +35,26 @@ export function setSelfHosted() {
   env.URL = sharedEnv.URL = `https://${faker.internet.domainName()}`;
 }
 
+/**
+ * Mock scheduling for all task subclasses in the current test file.
+ *
+ * @returns the schedule mock for assertions.
+ */
+export function mockTaskSchedule() {
+  const schedule = vi.fn<BaseTask<object>["schedule"]>();
+
+  beforeEach(() => {
+    schedule.mockReset();
+    vi.spyOn(BaseTask.prototype, "schedule").mockImplementation(schedule);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  return schedule;
+}
+
 export function withAPIContext<T>(
   user: User,
   fn: (ctx: APIContext) => T
@@ -41,7 +64,7 @@ export function withAPIContext<T>(
       auth: {
         user,
         type: AuthenticationType.APP,
-        token: user.getJwtToken(),
+        token: user.getSessionToken(),
       },
       transaction,
     };
@@ -53,4 +76,26 @@ export function withAPIContext<T>(
       },
     } as APIContext);
   });
+}
+
+/**
+ * Helper function to convert an object to form-urlencoded string.
+ * Useful for testing OAuth endpoints that expect application/x-www-form-urlencoded content type.
+ *
+ * @param obj Object to convert to form-urlencoded string
+ * @returns Form-urlencoded string representation of the object
+ */
+export function toFormData(
+  obj: Record<string, string | number | boolean | null | undefined>
+): string {
+  return Object.entries(obj)
+    .filter(
+      (entry): entry is [string, string | number | boolean] =>
+        entry[1] !== undefined && entry[1] !== null
+    )
+    .map(
+      ([key, value]) =>
+        `${encodeURIComponent(key)}=${encodeURIComponent(value)}`
+    )
+    .join("&");
 }

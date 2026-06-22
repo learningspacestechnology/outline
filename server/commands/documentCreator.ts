@@ -1,10 +1,11 @@
-import { Optional } from "utility-types";
-import { ProsemirrorHelper as SharedProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
+import type { Optional } from "utility-types";
 import { TextHelper } from "@shared/utils/TextHelper";
-import { Document, Event, User } from "@server/models";
+import { Collection, Document, type Template } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
-import { APIContext } from "@server/types";
+import { authorize } from "@server/policies";
+import type { APIContext } from "@server/types";
+import { assertPresent } from "@server/validation";
 
 type Props = Optional<
   Pick<
@@ -20,52 +21,164 @@ type Props = Optional<
     | "parentDocumentId"
     | "importId"
     | "apiImportId"
-    | "template"
     | "fullWidth"
     | "sourceMetadata"
     | "editorVersion"
     | "publishedAt"
     | "createdAt"
     | "updatedAt"
+    | "createdById"
+    | "lastModifiedById"
   >
 > & {
   state?: Buffer;
   publish?: boolean;
-  templateDocument?: Document | null;
-  user: User;
-  ctx: APIContext;
+  template?: Template | null;
+  index?: number;
 };
 
-export default async function documentCreator({
-  title,
-  text,
-  icon,
-  color,
-  state,
-  id,
-  urlId,
-  publish,
-  collectionId,
-  parentDocumentId,
-  content,
-  template,
-  templateDocument,
-  fullWidth,
-  importId,
-  apiImportId,
-  createdAt,
-  // allows override for import
-  updatedAt,
-  user,
-  editorVersion,
-  publishedAt,
-  sourceMetadata,
-  ctx,
-}: Props): Promise<Document> {
-  const { transaction, ip } = ctx.context;
-  const templateId = templateDocument ? templateDocument.id : undefined;
+type CreateLocation = {
+  /** The collection to place the document in, if any. */
+  collectionId?: string | null;
+  /** The parent document to nest the new document under, if any. */
+  parentDocumentId?: string | null;
+};
 
-  if (state && templateDocument) {
+/**
+ * Authorizes the creation of a document at the requested location and resolves
+ * the collection and parent document it will belong to. Shared by the
+ * documents.create API route and the MCP create_document tool so that both
+ * enforce identical permissions, including the team-level check that prevents
+ * viewers and guests from creating drafts with no collection.
+ *
+ * @param ctx the API context containing the acting user.
+ * @param location the requested collection and/or parent document.
+ * @returns the resolved collection and parent document, when applicable.
+ * @throws AuthorizationError when the user may not create the document.
+ */
+export async function authorizeDocumentCreate(
+  ctx: APIContext,
+  { collectionId, parentDocumentId }: CreateLocation
+): Promise<{
+  collection?: Collection | null;
+  parentDocument?: Document | null;
+}> {
+  const { user } = ctx.state.auth;
+  const { transaction } = ctx.state;
+
+  if (parentDocumentId) {
+    const parentDocument = await Document.findByPk(parentDocumentId, {
+      userId: user.id,
+      transaction,
+    });
+    const collection = parentDocument?.collectionId
+      ? await Collection.findByPk(parentDocument.collectionId, {
+          userId: user.id,
+          transaction,
+        })
+      : undefined;
+    authorize(user, "createChildDocument", parentDocument, { collection });
+    return { collection, parentDocument };
+  }
+
+  if (collectionId) {
+    const collection = await Collection.findByPk(collectionId, {
+      userId: user.id,
+      transaction,
+    });
+    authorize(user, "createDocument", collection);
+    return { collection };
+  }
+
+  authorize(user, "createDocument", user.team);
+  return {};
+}
+
+/**
+ * Authorizes publishing a document into a collection and resolves the target
+ * collection. Shared by the documents.update API route and the MCP
+ * update_document tool. Publishing places a document into a collection, so it
+ * requires create permission on the destination — separate from the update
+ * permission that governs editing a draft's content.
+ *
+ * @param ctx the API context containing the acting user.
+ * @param document the document being published.
+ * @param collectionId the destination collection, required when publishing a draft that has none.
+ * @returns the resolved destination collection.
+ * @throws AuthorizationError when the user may not publish into the collection.
+ */
+export async function authorizeDocumentPublish(
+  ctx: APIContext,
+  document: Document,
+  collectionId?: string | null
+): Promise<Collection | null | undefined> {
+  const { user } = ctx.state.auth;
+  const { transaction } = ctx.state;
+  let collection = document.collection;
+
+  if (document.isDraft) {
+    authorize(user, "publish", document);
+  }
+
+  if (!document.collectionId) {
+    assertPresent(
+      collectionId,
+      "collectionId is required to publish a draft without collection"
+    );
+    collection = await Collection.findByPk(collectionId!, {
+      userId: user.id,
+      transaction,
+    });
+  }
+
+  if (document.parentDocumentId) {
+    const parentDocument = await Document.findByPk(document.parentDocumentId, {
+      userId: user.id,
+      transaction,
+    });
+    authorize(user, "createChildDocument", parentDocument, { collection });
+  } else {
+    authorize(user, "createDocument", collection);
+  }
+
+  return collection;
+}
+
+export default async function documentCreator(
+  ctx: APIContext,
+  {
+    title,
+    text,
+    icon,
+    color,
+    state,
+    id,
+    urlId,
+    publish,
+    index,
+    collectionId,
+    parentDocumentId,
+    content,
+    template,
+    fullWidth,
+    importId,
+    apiImportId,
+    createdAt,
+    // allows override for import
+    updatedAt,
+    editorVersion,
+    publishedAt,
+    sourceMetadata,
+    createdById,
+    lastModifiedById,
+  }: Props
+): Promise<Document> {
+  const { user } = ctx.state.auth;
+  const { transaction } = ctx.state;
+  const templateId = template ? template.id : undefined;
+  const eventData = importId || apiImportId ? { source: "import" } : undefined;
+
+  if (state && template) {
     throw new Error(
       "State cannot be set when creating a document from a template"
     );
@@ -86,22 +199,18 @@ export default async function documentCreator({
 
   const titleWithReplacements =
     title ??
-    (templateDocument
-      ? template
-        ? templateDocument.title
-        : TextHelper.replaceTemplateVariables(templateDocument.title, user)
-      : "");
+    (template ? TextHelper.replaceTemplateVariables(template.title, user) : "");
 
-  const contentWithReplacements = text
-    ? ProsemirrorHelper.toProsemirror(text).toJSON()
-    : templateDocument
-    ? template
-      ? templateDocument.content
-      : SharedProsemirrorHelper.replaceTemplateVariables(
-          await DocumentHelper.toJSON(templateDocument),
-          user
-        )
-    : content;
+  const contentWithReplacements = content
+    ? content
+    : text
+      ? ProsemirrorHelper.toProsemirror(text).toJSON()
+      : template
+        ? ProsemirrorHelper.replaceTemplateVariables(
+            await DocumentHelper.toJSON(template),
+            user
+          )
+        : ProsemirrorHelper.toProsemirror("").toJSON();
 
   const document = Document.build({
     id,
@@ -112,75 +221,45 @@ export default async function documentCreator({
     teamId: user.teamId,
     createdAt,
     updatedAt: updatedAt ?? createdAt,
-    lastModifiedById: user.id,
-    createdById: user.id,
-    template,
+    lastModifiedById: lastModifiedById ?? createdById ?? user.id,
+    createdById: createdById ?? user.id,
     templateId,
     publishedAt,
     importId,
     apiImportId,
     sourceMetadata,
-    fullWidth: fullWidth ?? templateDocument?.fullWidth,
-    icon: icon ?? templateDocument?.icon,
-    color: color ?? templateDocument?.color,
+    fullWidth: fullWidth ?? template?.fullWidth,
+    icon: icon ?? template?.icon,
+    color: color ?? template?.color,
     title: titleWithReplacements,
     content: contentWithReplacements,
     state,
   });
 
-  document.text = DocumentHelper.toMarkdown(document, {
+  document.text = await DocumentHelper.toMarkdown(document, {
     includeTitle: false,
   });
 
-  await document.save({
-    silent: !!createdAt,
-    transaction,
-  });
-
-  await Event.create(
+  await document.saveWithCtx(
+    ctx,
     {
-      name: "documents.create",
-      documentId: document.id,
-      collectionId: document.collectionId,
-      teamId: document.teamId,
-      actorId: user.id,
-      data: {
-        source: importId || apiImportId ? "import" : undefined,
-        title: document.title,
-        templateId,
-      },
-      ip,
+      silent: !!createdAt,
     },
-    {
-      transaction,
-    }
+    { data: eventData }
   );
 
   if (publish) {
-    if (!collectionId && !template) {
+    if (!collectionId) {
       throw new Error("Collection ID is required to publish");
     }
 
-    await document.publish(user, collectionId, { silent: true, transaction });
-    if (document.title) {
-      await Event.create(
-        {
-          name: "documents.publish",
-          documentId: document.id,
-          collectionId: document.collectionId,
-          teamId: document.teamId,
-          actorId: user.id,
-          data: {
-            source: importId ? "import" : undefined,
-            title: document.title,
-          },
-          ip,
-        },
-        {
-          transaction,
-        }
-      );
-    }
+    await document.publish(ctx, {
+      collectionId,
+      silent: true,
+      index,
+      event: !!document.title,
+      data: eventData,
+    });
   }
 
   // reload to get all of the data needed to present (user, collection etc)

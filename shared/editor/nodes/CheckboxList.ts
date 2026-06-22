@@ -1,12 +1,19 @@
-import { wrappingInputRule } from "prosemirror-inputrules";
-import {
+import type {
   NodeSpec,
   NodeType,
   Schema,
   Node as ProsemirrorNode,
 } from "prosemirror-model";
+import { Plugin } from "prosemirror-state";
+import { v4 as generateUuid } from "uuid";
 import toggleList from "../commands/toggleList";
-import { MarkdownSerializerState } from "../lib/markdown/serializer";
+import type { MarkdownSerializerState } from "../lib/markdown/serializer";
+import {
+  checkboxListInputRule,
+  listWrappingInputRule,
+} from "../lib/listInputRule";
+import { findBlockNodes } from "../queries/findChildren";
+import { CheckboxListView } from "./CheckboxListView";
 import Node from "./Node";
 
 export default class CheckboxList extends Node {
@@ -18,6 +25,9 @@ export default class CheckboxList extends Node {
     return {
       group: "block list",
       content: "checkbox_item+",
+      attrs: {
+        id: { default: null },
+      },
       toDOM: () => ["ul", { class: this.name }, 0],
       parseDOM: [
         {
@@ -25,6 +35,46 @@ export default class CheckboxList extends Node {
         },
       ],
     };
+  }
+
+  get plugins() {
+    const userIdentifier = this.editor.props.userId;
+
+    // Plugin to auto-assign IDs to checkbox lists
+    const assignIdsPlugin = new Plugin({
+      appendTransaction: (txs, _oldSt, newSt) => {
+        const hasDocChanges = txs.some((t) => t.docChanged);
+        if (!hasDocChanges) {
+          return null;
+        }
+
+        const checkboxLists = findBlockNodes(newSt.doc, true).filter(
+          (b) => b.node.type.name === this.name && !b.node.attrs.id
+        );
+
+        if (checkboxLists.length === 0) {
+          return null;
+        }
+
+        let modifyTx = newSt.tr;
+        checkboxLists.forEach((listBlock) => {
+          modifyTx.setNodeAttribute(listBlock.pos, "id", generateUuid());
+        });
+        return modifyTx;
+      },
+    });
+
+    // Plugin to provide NodeViews
+    const nodeViewPlugin = new Plugin({
+      props: {
+        nodeViews: {
+          [this.name]: (node, view, getPos) =>
+            new CheckboxListView(node, view, getPos, userIdentifier || ""),
+        },
+      },
+    });
+
+    return [assignIdsPlugin, nodeViewPlugin];
   }
 
   keys({ type, schema }: { type: NodeType; schema: Schema }) {
@@ -37,8 +87,14 @@ export default class CheckboxList extends Node {
     return () => toggleList(type, schema.nodes.checkbox_item);
   }
 
-  inputRules({ type }: { type: NodeType }) {
-    return [wrappingInputRule(/^-?\s*(\[ \])\s$/i, type)];
+  inputRules({ type, schema }: { type: NodeType; schema: Schema }) {
+    const pattern = /^-?\s*(\[\s?\])\s$/i;
+    return [
+      // Convert an existing plain list to a checklist, keeping nesting intact.
+      checkboxListInputRule(pattern, type, schema.nodes.checkbox_item),
+      // Wrap a plain paragraph into a new checklist.
+      listWrappingInputRule(pattern, type),
+    ];
   }
 
   toMarkdown(state: MarkdownSerializerState, node: ProsemirrorNode) {

@@ -1,19 +1,16 @@
 import invariant from "invariant";
-import find from "lodash/find";
-import isEmpty from "lodash/isEmpty";
-import orderBy from "lodash/orderBy";
-import sortBy from "lodash/sortBy";
+import { isEmpty, orderBy, sortBy } from "es-toolkit/compat";
 import { computed, action, runInAction } from "mobx";
 import {
   CollectionPermission,
   CollectionStatusFilter,
-  FileOperationFormat,
+  type FileOperationFormat,
   SubscriptionType,
 } from "@shared/types";
 import Collection from "~/models/Collection";
-import { PaginationParams, Properties } from "~/types";
+import type { PaginationParams, Properties } from "~/types";
 import { client } from "~/utils/ApiClient";
-import RootStore from "./RootStore";
+import type RootStore from "./RootStore";
 import Store from "./base/Store";
 
 export default class CollectionsStore extends Store<Collection> {
@@ -150,13 +147,6 @@ export default class CollectionsStore extends Store<Collection> {
   }
 
   @action
-  async fetch(id: string, options?: { force: boolean }): Promise<Collection> {
-    const model = await super.fetch(id, options);
-    await model.fetchDocuments(options);
-    return model;
-  }
-
-  @action
   fetchNamedPage = async (
     request = "list",
     options:
@@ -185,6 +175,13 @@ export default class CollectionsStore extends Store<Collection> {
       ...options,
       statusFilter: [CollectionStatusFilter.Archived],
     });
+
+  get(id: string = ""): Collection | undefined {
+    return (
+      this.data.get(id) ??
+      this.orderedData.find((collection) => id.endsWith(collection.urlId))
+    );
+  }
 
   @computed
   get archived(): Collection[] {
@@ -235,19 +232,15 @@ export default class CollectionsStore extends Store<Collection> {
     return this.orderedData.map((collection) => collection.asNavigationNode);
   }
 
-  getByUrl(url: string): Collection | null | undefined {
-    return find(this.orderedData, (col: Collection) => url.endsWith(col.urlId));
-  }
-
   async delete(collection: Collection) {
     await super.delete(collection);
     await this.rootStore.documents.fetchRecentlyUpdated();
     await this.rootStore.documents.fetchRecentlyViewed();
   }
 
-  export = (format: FileOperationFormat, includeAttachments: boolean) =>
-    client.post("/collections.export_all", {
-      format,
-      includeAttachments,
-    });
+  export = (options: {
+    format: FileOperationFormat;
+    includeAttachments: boolean;
+    includePrivate: boolean;
+  }) => client.post("/collections.export_all", options);
 }

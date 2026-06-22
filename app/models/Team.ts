@@ -1,6 +1,7 @@
 import { computed, observable } from "mobx";
 import { TeamPreferenceDefaults } from "@shared/constants";
-import { TeamPreference, TeamPreferences, UserRole } from "@shared/types";
+import { CommentingAccess, TeamPreference } from "@shared/types";
+import type { TeamPreferences, UserRole } from "@shared/types";
 import { stringToColor } from "@shared/utils/color";
 import Model from "./base/Model";
 import Field from "./decorators/Field";
@@ -11,6 +12,10 @@ class Team extends Model {
   @Field
   @observable
   name: string;
+
+  @Field
+  @observable
+  description: string | null;
 
   @Field
   @observable
@@ -50,11 +55,19 @@ class Team extends Model {
 
   @Field
   @observable
+  passkeysEnabled: boolean;
+
+  @Field
+  @observable
   subdomain: string | null | undefined;
 
   @Field
   @observable
   defaultUserRole: UserRole;
+
+  @Field
+  @observable
+  guidanceMCP: string | null;
 
   @Field
   @observable
@@ -86,6 +99,19 @@ class Team extends Model {
   }
 
   /**
+   * Whether commenting is enabled for the team, for either members or
+   * members and guests.
+   *
+   * @returns true if commenting is enabled, false otherwise.
+   */
+  @computed
+  get commentingEnabled(): boolean {
+    const access = this.getPreference(TeamPreference.Commenting);
+    // A legacy boolean `false` (team not yet migrated) means disabled.
+    return access !== CommentingAccess.None && access !== false;
+  }
+
+  /**
    * Returns the value of the provided preference.
    *
    * @param preference The team preference to retrieve
@@ -106,10 +132,10 @@ class Team extends Model {
   /**
    * Set the value for a specific preference key.
    *
-   * @param key The TeamPreference key to retrieve
-   * @param value The value to set
+   * @param key The TeamPreference key to set.
+   * @param value The value to set.
    */
-  setPreference(key: TeamPreference, value: boolean) {
+  setPreference<T extends TeamPreference>(key: T, value: TeamPreferences[T]) {
     this.preferences = {
       ...this.preferences,
       [key]: value,

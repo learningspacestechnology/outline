@@ -1,19 +1,23 @@
-import { Blob } from "buffer";
-import { mkdir, unlink, rmdir } from "fs/promises";
-import path from "path";
-import { Readable } from "stream";
-import { PresignedPost } from "@aws-sdk/s3-presigned-post";
+import { Blob } from "node:buffer";
+import { mkdir, unlink, rmdir } from "node:fs/promises";
+import path from "node:path";
+import { Readable } from "node:stream";
+import type { PresignedPost } from "@aws-sdk/s3-presigned-post";
 import fs from "fs-extra";
 import invariant from "invariant";
 import JWT from "jsonwebtoken";
 import safeResolvePath from "resolve-path";
+import { toError } from "@shared/utils/error";
 import env from "@server/env";
-import { ValidationError } from "@server/errors";
+import { InternalError, ValidationError } from "@server/errors";
 import Logger from "@server/logging/Logger";
 import BaseStorage from "./BaseStorage";
+import { CSRF } from "@shared/constants";
+import type { AppContext } from "@server/types";
 
 export default class LocalStorage extends BaseStorage {
   public async getPresignedPost(
+    ctx: AppContext,
     key: string,
     acl: string,
     maxUploadSize: number,
@@ -26,6 +30,7 @@ export default class LocalStorage extends BaseStorage {
         acl,
         maxUploadSize: String(maxUploadSize),
         contentType,
+        [CSRF.fieldName]: ctx.cookies.get(CSRF.cookieName) || "",
       },
     });
   }
@@ -91,7 +96,7 @@ export default class LocalStorage extends BaseStorage {
     try {
       await unlink(filePath);
     } catch (err) {
-      Logger.warn(`Couldn't delete ${filePath}`, err);
+      Logger.warn(`Couldn't delete ${filePath}`, { error: err });
       return;
     }
 
@@ -99,10 +104,10 @@ export default class LocalStorage extends BaseStorage {
     try {
       await rmdir(directory);
     } catch (err) {
-      if (err.code === "ENOTEMPTY") {
+      if (err instanceof Error && "code" in err && err.code === "ENOTEMPTY") {
         return;
       }
-      Logger.warn(`Couldn't delete directory ${directory}`, err);
+      Logger.warn(`Couldn't delete directory ${directory}`, { error: err });
     }
   }
 
@@ -132,12 +137,45 @@ export default class LocalStorage extends BaseStorage {
     };
   }
 
-  public getFileStream(key: string, range?: { start: number; end: number }) {
-    return Promise.resolve(fs.createReadStream(this.getFilePath(key), range));
+  public async getFileStream(
+    key: string,
+    range?: { start: number; end: number }
+  ) {
+    const filePath = this.getFilePath(key);
+    const exists = await fs.pathExists(filePath);
+    if (!exists) {
+      throw InternalError(`File not found at ${key}`);
+    }
+
+    if (range) {
+      if (
+        typeof range.start !== "number" ||
+        typeof range.end !== "number" ||
+        range.start < 0 ||
+        range.end < range.start
+      ) {
+        throw ValidationError("Invalid range specified");
+      }
+    }
+
+    try {
+      return fs.createReadStream(filePath, range);
+    } catch (err) {
+      Logger.error(`Failed to create read stream`, toError(err), { filePath });
+      throw ValidationError("Unable to read file");
+    }
   }
 
   public stat(key: string) {
     return fs.stat(this.getFilePath(key));
+  }
+
+  public getFileExists(key: string) {
+    return fs.pathExists(this.getFilePath(key));
+  }
+
+  public moveFile(fromKey: string, toKey: string): Promise<void> {
+    return fs.move(this.getFilePath(fromKey), this.getFilePath(toKey));
   }
 
   private getFilePath(key: string) {

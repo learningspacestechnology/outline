@@ -1,12 +1,13 @@
-import { LocationDescriptor } from "history";
+import type { LocationDescriptor } from "history";
 import { DisclosureIcon } from "outline-icons";
 import { darken, lighten, transparentize } from "polished";
 import * as React from "react";
 import styled from "styled-components";
+import type { HapticInput } from "web-haptics";
+import { useWebHaptics } from "web-haptics/react";
 import { s } from "@shared/styles";
-import ActionButton, {
-  Props as ActionButtonProps,
-} from "~/components/ActionButton";
+import type { Props as ActionButtonProps } from "~/components/ActionButton";
+import ActionButton from "~/components/ActionButton";
 import { undraggableOnDesktop } from "~/styles";
 
 type RealProps = {
@@ -34,6 +35,7 @@ const RealButton = styled(ActionButton)<RealProps>`
   cursor: var(--pointer);
   user-select: none;
   appearance: none !important;
+  transition: background 200ms ease-out;
   ${undraggableOnDesktop()}
 
   &::-moz-focus-inner {
@@ -44,6 +46,7 @@ const RealButton = styled(ActionButton)<RealProps>`
   &:hover:not(:disabled),
   &[aria-expanded="true"] {
     background: ${(props) => darken(0.05, props.theme.accent)};
+    transition: background 0s;
   }
 
   &:disabled {
@@ -73,11 +76,12 @@ const RealButton = styled(ActionButton)<RealProps>`
       background: ${
         props.$borderOnHover
           ? props.theme.buttonNeutralBackground
-          : darken(0.05, props.theme.buttonNeutralBackground)
+          : props.theme.buttonNeutralHoverBackground
       };
       box-shadow: rgba(0, 0, 0, 0.07) 0px 1px 2px, ${
         props.theme.buttonNeutralBorder
       } 0 0 0 1px inset;
+      transition: background 0s;
     }
 
     &:focus-visible {
@@ -103,6 +107,7 @@ const RealButton = styled(ActionButton)<RealProps>`
       &:hover:not(:disabled),
       &[aria-expanded="true"] {
         background: ${darken(0.05, props.theme.danger)};
+        transition: background 0s;
       }
 
       &:disabled {
@@ -120,7 +125,7 @@ const Label = styled.span<{ hasIcon?: boolean }>`
   white-space: nowrap;
   text-overflow: ellipsis;
 
-  ${(props) => props.hasIcon && "padding-left: 4px;"};
+  ${(props) => props.hasIcon && "padding-inline-start: 4px;"};
 `;
 
 export const Inner = styled.span<{
@@ -130,13 +135,13 @@ export const Inner = styled.span<{
 }>`
   display: flex;
   padding: 0 8px;
-  padding-right: ${(props) => (props.disclosure ? 2 : 8)}px;
+  padding-inline-end: ${(props) => (props.disclosure ? 2 : 8)}px;
   line-height: ${(props) => (props.hasIcon ? 24 : 32)}px;
   justify-content: center;
   align-items: center;
   min-height: 32px;
 
-  ${(props) => props.hasIcon && props.hasText && "padding-left: 4px;"};
+  ${(props) => props.hasIcon && props.hasText && "padding-inline-start: 4px;"};
   ${(props) => props.hasIcon && !props.hasText && "padding: 0 4px;"};
 `;
 
@@ -149,6 +154,8 @@ export type Props<T> = ActionButtonProps & {
   fullwidth?: boolean;
   as?: T;
   to?: LocationDescriptor;
+  /** Haptic feedback to trigger on click. Pass a preset name or custom pattern. */
+  haptic?: HapticInput;
   borderOnHover?: boolean;
   hideIcon?: boolean;
   href?: string;
@@ -173,11 +180,13 @@ const Button = <T extends React.ElementType = "button">(
     hideIcon,
     fullwidth,
     danger,
+    haptic,
     ...rest
   } = props;
   const hasText = !!children || value !== undefined;
-  const ic = hideIcon ? undefined : action?.icon ?? icon;
+  const ic = hideIcon ? undefined : (action?.icon ?? icon);
   const hasIcon = ic !== undefined;
+  const { trigger } = useWebHaptics();
 
   return (
     <RealButton
@@ -188,6 +197,7 @@ const Button = <T extends React.ElementType = "button">(
       $danger={danger}
       $fullwidth={fullwidth}
       $borderOnHover={borderOnHover}
+      onClickCapture={haptic ? () => void trigger(haptic) : undefined}
       {...rest}
     >
       <Inner hasIcon={hasIcon} hasText={hasText} disclosure={disclosure}>

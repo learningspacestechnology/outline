@@ -1,7 +1,5 @@
-import throttle from "lodash/throttle";
-import * as React from "react";
+import { useState, useMemo } from "react";
 import useEventListener from "./useEventListener";
-import useIsMounted from "./useIsMounted";
 
 /**
  * Mouse position as a tuple of [x, y]
@@ -14,22 +12,18 @@ type MousePosition = [number, number];
  * @returns Mouse position as a tuple of [x, y]
  */
 export const useMousePosition = () => {
-  const isMounted = useIsMounted();
-  const [mousePosition, setMousePosition] = React.useState<MousePosition>([
-    0, 0,
-  ]);
+  const [mousePosition, setMousePosition] = useState<MousePosition>([0, 0]);
 
-  const updateMousePosition = React.useMemo(
-    () =>
-      throttle((ev: MouseEvent) => {
-        if (isMounted()) {
-          setMousePosition([ev.clientX, ev.clientY]);
-        }
-      }, 200),
-    [isMounted]
+  const updateMousePosition = useMemo(
+    () => (ev: MouseEvent) => {
+      setMousePosition([ev.clientX, ev.clientY]);
+    },
+    []
   );
 
-  useEventListener("mousemove", updateMousePosition);
+  useEventListener("mousemove", updateMousePosition, undefined, {
+    passive: true,
+  });
 
   return mousePosition;
 };

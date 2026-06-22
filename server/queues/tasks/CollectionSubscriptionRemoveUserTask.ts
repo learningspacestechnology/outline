@@ -5,8 +5,8 @@ import Logger from "@server/logging/Logger";
 import { Collection, Subscription, User } from "@server/models";
 import { can } from "@server/policies";
 import { sequelize } from "@server/storage/database";
-import { CollectionUserEvent } from "@server/types";
-import BaseTask from "./BaseTask";
+import type { CollectionUserEvent } from "@server/types";
+import { BaseTask } from "./base/BaseTask";
 
 export default class CollectionSubscriptionRemoveUserTask extends BaseTask<CollectionUserEvent> {
   public async perform(event: CollectionUserEvent) {
@@ -16,9 +16,9 @@ export default class CollectionSubscriptionRemoveUserTask extends BaseTask<Colle
       return;
     }
 
-    const collection = await Collection.scope({
-      method: ["withMembership", user.id],
-    }).findByPk(event.collectionId);
+    const collection = await Collection.findByPk(event.collectionId, {
+      userId: user.id,
+    });
 
     if (can(user, "read", collection)) {
       Logger.debug(

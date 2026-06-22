@@ -1,26 +1,28 @@
 import { action, observable } from "mobx";
 import { Plugin } from "prosemirror-state";
-import { EditorView } from "prosemirror-view";
-import * as React from "react";
+import type { EditorView } from "prosemirror-view";
 import Extension from "@shared/editor/lib/Extension";
 import parseDocumentSlug from "@shared/utils/parseDocumentSlug";
+import stores from "~/stores";
 import HoverPreview from "~/components/HoverPreview";
 import env from "~/env";
-import { client } from "~/utils/ApiClient";
 
+/**
+ * Options for the HoverPreviews extension.
+ */
 interface HoverPreviewsOptions {
-  /** Delay before the target is considered "hovered" and callback is triggered. */
+  /** Delay in milliseconds before the target is considered "hovered" and the preview is shown. */
   delay: number;
 }
 
-export default class HoverPreviews extends Extension {
+export default class HoverPreviews extends Extension<HoverPreviewsOptions> {
   state: {
     activeLinkElement: HTMLElement | null;
-    data: Record<string, any> | null;
+    unfurlId: string | null;
     dataLoading: boolean;
   } = observable({
     activeLinkElement: null,
-    data: null,
+    unfurlId: null,
     dataLoading: false,
   });
 
@@ -34,11 +36,14 @@ export default class HoverPreviews extends Extension {
     return "hover-previews";
   }
 
+  get allowInReadOnly() {
+    return true;
+  }
+
   get plugins() {
-    const isHoverTarget = (target: Element | null, view: EditorView) =>
+    const isHoverTarget = (target: Element | null) =>
       target instanceof HTMLElement &&
-      this.editor.elementRef.current?.contains(target) &&
-      (!view.editable || (view.editable && !view.hasFocus()));
+      this.editor.elementRef.current?.contains(target);
 
     let hoveringTimeout: ReturnType<typeof setTimeout>;
 
@@ -46,11 +51,11 @@ export default class HoverPreviews extends Extension {
       new Plugin({
         props: {
           handleDOMEvents: {
-            mouseover: (view: EditorView, event: MouseEvent) => {
+            mouseover: (_view: EditorView, event: MouseEvent) => {
               const target = (event.target as HTMLElement)?.closest(
                 ".use-hover-preview"
               );
-              if (isHoverTarget(target, view)) {
+              if (isHoverTarget(target)) {
                 hoveringTimeout = setTimeout(
                   action(async () => {
                     const element = target as HTMLElement;
@@ -62,19 +67,33 @@ export default class HoverPreviews extends Extension {
                     );
 
                     if (url) {
+                      const transformedUrl = url.startsWith("/")
+                        ? env.URL + url
+                        : url;
+
                       this.state.dataLoading = true;
-                      try {
-                        const data = await client.post("/urls.unfurl", {
-                          url: url.startsWith("/") ? env.URL + url : url,
-                          documentId,
-                        });
+
+                      const unfurl = await stores.unfurls.fetchUnfurl({
+                        url: transformedUrl,
+                        documentId,
+                      });
+
+                      // The fetch is async, so the pointer may have already
+                      // left the target (or the node may have been removed) by
+                      // the time it resolves – only show the preview if the
+                      // element is still hovered.
+                      if (
+                        unfurl &&
+                        element.isConnected &&
+                        element.matches(":hover")
+                      ) {
                         this.state.activeLinkElement = element;
-                        this.state.data = data;
-                      } catch (err) {
+                        this.state.unfurlId = transformedUrl;
+                      } else {
                         this.state.activeLinkElement = null;
-                      } finally {
-                        this.state.dataLoading = false;
                       }
+
+                      this.state.dataLoading = false;
                     }
                   }),
                   this.options.delay
@@ -82,11 +101,11 @@ export default class HoverPreviews extends Extension {
               }
               return false;
             },
-            mouseout: action((view: EditorView, event: MouseEvent) => {
+            mouseout: action((_view: EditorView, event: MouseEvent) => {
               const target = (event.target as HTMLElement)?.closest(
                 ".use-hover-preview"
               );
-              if (isHoverTarget(target, view)) {
+              if (isHoverTarget(target)) {
                 clearTimeout(hoveringTimeout);
                 this.state.activeLinkElement = null;
               }
@@ -101,10 +120,11 @@ export default class HoverPreviews extends Extension {
   widget = () => (
     <HoverPreview
       element={this.state.activeLinkElement}
-      data={this.state.data}
+      unfurlId={this.state.unfurlId}
       dataLoading={this.state.dataLoading}
       onClose={action(() => {
         this.state.activeLinkElement = null;
+        this.state.unfurlId = null;
       })}
     />
   );

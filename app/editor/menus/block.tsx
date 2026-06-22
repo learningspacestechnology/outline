@@ -9,6 +9,7 @@ import {
   HorizontalRuleIcon,
   OrderedListIcon,
   PageBreakIcon,
+  PDFIcon,
   TableIcon,
   TodoListIcon,
   ImageIcon,
@@ -16,18 +17,22 @@ import {
   WarningIcon,
   InfoIcon,
   AttachmentIcon,
-  ClockIcon,
   CalendarIcon,
   MathIcon,
   DoneIcon,
   EmbedIcon,
+  CollapseIcon,
 } from "outline-icons";
 import * as React from "react";
 import styled from "styled-components";
+import { v4 as uuidv4 } from "uuid";
+import type { TFunction } from "i18next";
 import Image from "@shared/editor/components/Img";
-import { MenuItem } from "@shared/editor/types";
+import type { MenuItem } from "@shared/editor/types";
+import { MentionType } from "@shared/types";
+import { toISODate } from "@shared/utils/date";
 import { metaDisplay } from "@shared/utils/keyboard";
-import { Dictionary } from "~/hooks/useDictionary";
+import Desktop from "~/utils/Desktop";
 
 const Img = styled(Image)`
   border-radius: 2px;
@@ -39,15 +44,15 @@ const Img = styled(Image)`
 `;
 
 export default function blockMenuItems(
-  dictionary: Dictionary,
+  t: TFunction,
   documentRef: React.RefObject<HTMLDivElement>
 ): MenuItem[] {
   const documentWidth = documentRef.current?.clientWidth ?? 0;
 
-  return [
+  const items = [
     {
       name: "heading",
-      title: dictionary.h1,
+      title: t("Big heading"),
       keywords: "h1 heading1 title",
       icon: <Heading1Icon />,
       shortcut: "^ ⇧ 1",
@@ -55,7 +60,7 @@ export default function blockMenuItems(
     },
     {
       name: "heading",
-      title: dictionary.h2,
+      title: t("Medium heading"),
       keywords: "h2 heading2",
       icon: <Heading2Icon />,
       shortcut: "^ ⇧ 2",
@@ -63,7 +68,7 @@ export default function blockMenuItems(
     },
     {
       name: "heading",
-      title: dictionary.h3,
+      title: t("Small heading"),
       keywords: "h3 heading3",
       icon: <Heading3Icon />,
       shortcut: "^ ⇧ 3",
@@ -71,7 +76,7 @@ export default function blockMenuItems(
     },
     {
       name: "heading",
-      title: dictionary.h4,
+      title: t("Extra small heading"),
       keywords: "h4 heading4",
       icon: <Heading4Icon />,
       shortcut: "^ ⇧ 4",
@@ -82,20 +87,20 @@ export default function blockMenuItems(
     },
     {
       name: "checkbox_list",
-      title: dictionary.checkboxList,
+      title: t("Todo list"),
       icon: <TodoListIcon />,
       keywords: "checklist checkbox task",
       shortcut: "^ ⇧ 7",
     },
     {
       name: "bullet_list",
-      title: dictionary.bulletList,
+      title: t("Bulleted list"),
       icon: <BulletedListIcon />,
       shortcut: "^ ⇧ 8",
     },
     {
       name: "ordered_list",
-      title: dictionary.orderedList,
+      title: t("Ordered list"),
       icon: <OrderedListIcon />,
       shortcut: "^ ⇧ 9",
     },
@@ -104,25 +109,35 @@ export default function blockMenuItems(
     },
     {
       name: "image",
-      title: dictionary.image,
+      title: t("Image"),
       icon: <ImageIcon />,
       keywords: "picture photo",
     },
     {
       name: "video",
-      title: dictionary.video,
+      title: t("Video"),
       icon: <EmbedIcon />,
       keywords: "mov avi upload player",
     },
     {
       name: "attachment",
-      title: dictionary.file,
+      title: t("Embed PDF"),
+      icon: <PDFIcon />,
+      keywords: "pdf upload attach",
+      attrs: {
+        accept: "application/pdf",
+        preview: true,
+      },
+    },
+    {
+      name: "attachment",
+      title: t("File attachment"),
       icon: <AttachmentIcon />,
       keywords: "file upload attach",
     },
     {
       name: "table",
-      title: dictionary.table,
+      title: t("Table"),
       icon: <TableIcon />,
       attrs: {
         rowsCount: 3,
@@ -132,83 +147,89 @@ export default function blockMenuItems(
     },
     {
       name: "blockquote",
-      title: dictionary.quote,
+      title: t("Quote"),
       icon: <BlockQuoteIcon />,
       keywords: "blockquote pullquote",
       shortcut: `${metaDisplay} ]`,
     },
     {
       name: "code_block",
-      title: dictionary.codeBlock,
+      title: t("Code block"),
       icon: <CodeIcon />,
       shortcut: "^ ⇧ c",
       keywords: "script",
     },
     {
       name: "math_block",
-      title: dictionary.mathBlock,
+      title: t("Math block (LaTeX)"),
       icon: <MathIcon />,
       keywords: "math katex latex",
     },
     {
+      name: "container_toggle",
+      title: t("Toggle block"),
+      icon: <CollapseIcon />,
+      keywords: "toggle collapsible collapse fold",
+    },
+    {
       name: "hr",
-      title: dictionary.hr,
+      title: t("Divider"),
       icon: <HorizontalRuleIcon />,
       shortcut: `${metaDisplay} _`,
       keywords: "horizontal rule break line",
     },
     {
       name: "hr",
-      title: dictionary.pageBreak,
+      title: t("Page break"),
       icon: <PageBreakIcon />,
       keywords: "page print break line",
       attrs: { markup: "***" },
     },
     {
-      name: "date",
-      title: dictionary.insertDate,
-      keywords: "clock today",
+      // Inserts a date mention for today. Supersedes the deprecated "Current
+      // date/time" commands that inserted a static string or template token.
+      name: "mention",
+      title: t("Current date"),
+      keywords: "clock today date time now",
       icon: <CalendarIcon />,
-    },
-    {
-      name: "time",
-      title: dictionary.insertTime,
-      keywords: "clock now",
-      icon: <ClockIcon />,
-    },
-    {
-      name: "datetime",
-      title: dictionary.insertDateTime,
-      keywords: "clock today date",
-      icon: <CalendarIcon />,
+      appendSpace: true,
+      attrs: () => {
+        const modelId = toISODate(new Date());
+        return {
+          id: uuidv4(),
+          type: MentionType.Date,
+          modelId,
+          label: modelId,
+        };
+      },
     },
     {
       name: "separator",
     },
     {
       name: "container_notice",
-      title: dictionary.infoNotice,
+      title: t("Info notice"),
       icon: <InfoIcon />,
       keywords: "notice card information",
       attrs: { style: "info" },
     },
     {
       name: "container_notice",
-      title: dictionary.successNotice,
+      title: t("Success notice"),
       icon: <DoneIcon />,
       keywords: "notice card success",
       attrs: { style: "success" },
     },
     {
       name: "container_notice",
-      title: dictionary.warningNotice,
+      title: t("Warning notice"),
       icon: <WarningIcon />,
       keywords: "notice card error",
       attrs: { style: "warning" },
     },
     {
       name: "container_notice",
-      title: dictionary.tipNotice,
+      title: t("Tip notice"),
       icon: <StarredIcon />,
       keywords: "notice card suggestion",
       attrs: { style: "tip" },
@@ -221,7 +242,18 @@ export default function blockMenuItems(
       title: "Mermaid Diagram",
       icon: <Img src="/images/mermaidjs.png" alt="Mermaid Diagram" />,
       keywords: "diagram flowchart",
-      attrs: { language: "mermaidjs" },
+      attrs: { language: "mermaid" },
+    },
+    {
+      name: "editDiagram",
+      title: "Diagrams.net Diagram",
+      icon: <Img src="/images/diagrams.png" alt="Diagrams.net Diagram" />,
+      keywords: "diagram flowchart draw.io",
     },
   ];
+
+  // Filter out diagrams.net in desktop app
+  return Desktop.isElectron()
+    ? items.filter((item) => item.name !== "editDiagram")
+    : items;
 }

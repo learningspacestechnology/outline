@@ -1,19 +1,46 @@
-import { Token } from "markdown-it";
-import { NodeSpec, Slice } from "prosemirror-model";
-import { Plugin } from "prosemirror-state";
-import { DecorationSet, Decoration } from "prosemirror-view";
-import { addRowBefore, selectRow, selectTable } from "../commands/table";
-import { getCellAttrs, setCellAttrs } from "../lib/table";
+import type Token from "markdown-it/lib/token.mjs";
 import {
-  getCellsInColumn,
-  isRowSelected,
-  isTableSelected,
-} from "../queries/table";
-import { EditorStyleHelper } from "../styles/EditorStyleHelper";
-import { cn } from "../styles/utils";
+  type Node as ProsemirrorNode,
+  type NodeSpec,
+  Slice,
+} from "prosemirror-model";
+import type { EditorState } from "prosemirror-state";
+import { Plugin, PluginKey } from "prosemirror-state";
+import { Decoration, DecorationSet } from "prosemirror-view";
+import { TableMap } from "prosemirror-tables";
+import {
+  getCellAttrs,
+  isValidCellAlignment,
+  isValidCellMarks,
+  setCellAttrs,
+} from "../lib/table";
 import Node from "./Node";
+import { presetColors, rgbaToHex } from "@shared/utils/color";
+import { parseToRgb, transparentize } from "polished";
+import type { RgbaColor } from "polished/lib/types/color";
 
 export default class TableCell extends Node {
+  /** The default opacity of the table cell background */
+  static opacity = 0.7;
+
+  /** Preset colors with opacity applied, used for table cell backgrounds */
+  static presetColors = presetColors.map((preset) => ({
+    hex: rgbaToHex(
+      parseToRgb(transparentize(1 - TableCell.opacity, preset.hex)) as RgbaColor
+    ),
+    name: preset.name,
+  }));
+
+  /**
+   * Checks if a color is one of the table cell preset colors.
+   *
+   * @param color - A hex color string to check.
+   * @returns true if the color matches a preset color's hex value.
+   */
+  static isPresetColor(color: string): boolean {
+    return TableCell.presetColors.some((c) => c.hex === color);
+  }
+
   get name() {
     return "td";
   }
@@ -22,6 +49,7 @@ export default class TableCell extends Node {
     return {
       content: "block+",
       tableRole: "cell",
+      group: "cell",
       isolating: true,
       parseDOM: [{ tag: "td", getAttrs: getCellAttrs }],
       toDOM(node) {
@@ -30,8 +58,13 @@ export default class TableCell extends Node {
       attrs: {
         colspan: { default: 1 },
         rowspan: { default: 1 },
-        alignment: { default: null },
+        alignment: { default: null, validate: isValidCellAlignment },
         colwidth: { default: null },
+        marks: {
+          default: undefined,
+          validate: (value: unknown) =>
+            isValidCellMarks(value, this.editor?.schema),
+        },
       },
     };
   }
@@ -43,33 +76,92 @@ export default class TableCell extends Node {
   parseMarkdown() {
     return {
       block: "td",
-      getAttrs: (tok: Token) => ({ alignment: tok.info }),
+      getAttrs: (tok: Token) => ({
+        alignment: isValidCellAlignment(tok.info) ? tok.info : null,
+      }),
     };
   }
 
   get plugins() {
-    function buildAddRowDecoration(pos: number, index: number) {
-      const className = cn(EditorStyleHelper.tableAddRow, {
-        first: index === 0,
+    const createCellDecorations = (state: EditorState) => {
+      const { doc } = state;
+      const decorations: Decoration[] = [];
+
+      // Iterate through all tables in the document
+      doc.descendants((node: ProsemirrorNode, pos: number) => {
+        if (node.type.spec.tableRole === "table") {
+          const map = TableMap.get(node);
+
+          // Mark cells in the first column and last row of this table
+          node.descendants((cellNode: ProsemirrorNode, cellPos: number) => {
+            if (
+              cellNode.type.spec.tableRole === "cell" ||
+              cellNode.type.spec.tableRole === "header_cell"
+            ) {
+              const cellOffset = cellPos;
+              const cellIndex = map.map.indexOf(cellOffset);
+
+              if (cellIndex !== -1) {
+                const col = cellIndex % map.width;
+                const row = Math.floor(cellIndex / map.width);
+                const rowspan = cellNode.attrs.rowspan || 1;
+                const colspan = cellNode.attrs.colspan || 1;
+                const attrs: Record<string, string> = {};
+
+                if (col === 0) {
+                  attrs["data-first-column"] = "true";
+                }
+
+                // Mark cells that extend into the last column (accounting for colspan)
+                if (col + colspan >= map.width) {
+                  attrs["data-last-column"] = "true";
+                }
+
+                // Mark cells that extend into the last row (accounting for rowspan)
+                if (row + rowspan >= map.height) {
+                  attrs["data-last-row"] = "true";
+                }
+
+                if (Object.keys(attrs).length > 0) {
+                  decorations.push(
+                    Decoration.node(
+                      pos + cellPos + 1,
+                      pos + cellPos + 1 + cellNode.nodeSize,
+                      attrs
+                    )
+                  );
+                }
+              }
+            }
+          });
+        }
       });
 
-      return Decoration.widget(
-        pos + 1,
-        () => {
-          const plus = document.createElement("a");
-          plus.role = "button";
-          plus.className = className;
-          plus.dataset.index = index.toString();
-          return plus;
-        },
-        {
-          key: cn(className, index),
-        }
-      );
-    }
+      return DecorationSet.create(doc, decorations);
+    };
 
     return [
       new Plugin({
+        key: new PluginKey("table-cell-attributes"),
+        state: {
+          init: (_, state) => createCellDecorations(state),
+          apply: (tr, pluginState, oldState, newState) => {
+            // Only recompute if document changed
+            if (!tr.docChanged) {
+              return pluginState;
+            }
+
+            return createCellDecorations(newState);
+          },
+        },
+        props: {
+          decorations(state) {
+            return this.getState(state);
+          },
+        },
+      }),
+      new Plugin({
+        key: new PluginKey("table-cell-copy-transform"),
         props: {
           transformCopied: (slice) => {
             // check if the copied selection is a single table, with a single row, with a single cell. If so,
@@ -99,115 +191,6 @@ export default class TableCell extends Node {
             }
 
             return slice;
-          },
-          handleDOMEvents: {
-            mousedown: (view, event) => {
-              if (!(event.target instanceof HTMLElement)) {
-                return false;
-              }
-
-              const targetAddRow = event.target.closest(
-                `.${EditorStyleHelper.tableAddRow}`
-              );
-              if (targetAddRow) {
-                event.preventDefault();
-                event.stopImmediatePropagation();
-                const index = Number(targetAddRow.getAttribute("data-index"));
-
-                addRowBefore({ index })(view.state, view.dispatch);
-                return true;
-              }
-
-              const targetGrip = event.target.closest(
-                `.${EditorStyleHelper.tableGrip}`
-              );
-              if (targetGrip) {
-                event.preventDefault();
-                event.stopImmediatePropagation();
-                selectTable()(view.state, view.dispatch);
-                return true;
-              }
-
-              const targetGripRow = event.target.closest(
-                `.${EditorStyleHelper.tableGripRow}`
-              );
-              if (targetGripRow) {
-                event.preventDefault();
-                event.stopImmediatePropagation();
-
-                selectRow(
-                  Number(targetGripRow.getAttribute("data-index")),
-                  event.metaKey || event.shiftKey
-                )(view.state, view.dispatch);
-                return true;
-              }
-
-              return false;
-            },
-          },
-          decorations: (state) => {
-            if (!this.editor.view?.editable) {
-              return;
-            }
-
-            const { doc } = state;
-            const decorations: Decoration[] = [];
-            const rows = getCellsInColumn(0)(state);
-
-            if (rows) {
-              rows.forEach((pos, index) => {
-                if (index === 0) {
-                  const className = cn(EditorStyleHelper.tableGrip, {
-                    selected: isTableSelected(state),
-                  });
-
-                  decorations.push(
-                    Decoration.widget(
-                      pos + 1,
-                      () => {
-                        const grip = document.createElement("a");
-                        grip.role = "button";
-                        grip.className = className;
-                        return grip;
-                      },
-                      {
-                        key: className,
-                      }
-                    )
-                  );
-                }
-
-                const className = cn(EditorStyleHelper.tableGripRow, {
-                  selected: isRowSelected(index)(state),
-                  first: index === 0,
-                  last: index === rows.length - 1,
-                });
-
-                decorations.push(
-                  Decoration.widget(
-                    pos + 1,
-                    () => {
-                      const grip = document.createElement("a");
-                      grip.role = "button";
-                      grip.className = className;
-                      grip.dataset.index = index.toString();
-                      return grip;
-                    },
-                    {
-                      key: cn(className, index),
-                    }
-                  )
-                );
-
-                if (index === 0) {
-                  decorations.push(buildAddRowDecoration(pos, index));
-                }
-
-                decorations.push(buildAddRowDecoration(pos, index + 1));
-              });
-            }
-
-            return DecorationSet.create(doc, decorations);
           },
         },
       }),

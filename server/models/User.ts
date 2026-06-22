@@ -1,16 +1,15 @@
-import crypto from "crypto";
+import crypto from "node:crypto";
 import { addHours, addMinutes, subMinutes } from "date-fns";
 import JWT from "jsonwebtoken";
-import { Context } from "koa";
-import {
+import type { Context } from "koa";
+import type {
   Transaction,
-  QueryTypes,
   SaveOptions,
-  Op,
   FindOptions,
   InferAttributes,
   InferCreationAttributes,
 } from "sequelize";
+import { QueryTypes, Op } from "sequelize";
 import { type InstanceUpdateOptions } from "sequelize";
 import {
   Table,
@@ -33,37 +32,47 @@ import {
 } from "sequelize-typescript";
 import { UserPreferenceDefaults } from "@shared/constants";
 import { languages } from "@shared/i18n";
-import type { NotificationSettings } from "@shared/types";
-import {
-  CollectionPermission,
+import type {
+  NotificationSettings,
   UserPreference,
   UserPreferences,
   NotificationEventType,
+} from "@shared/types";
+import {
+  CollectionPermission,
   NotificationEventDefaults,
   UserRole,
   DocumentPermission,
 } from "@shared/types";
 import { UserRoleHelper } from "@shared/utils/UserRoleHelper";
 import { stringToColor } from "@shared/utils/color";
-import { locales } from "@shared/utils/date";
+import type { locales } from "@shared/utils/date";
+import { UserValidation } from "@shared/validations";
 import env from "@server/env";
 import DeleteAttachmentTask from "@server/queues/tasks/DeleteAttachmentTask";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
+import { VerificationCode } from "@server/utils/VerificationCode";
 import parseAttachmentIds from "@server/utils/parseAttachmentIds";
+import { CacheHelper } from "@server/utils/CacheHelper";
+import { normalizeIp } from "@server/utils/ip";
+import { RedisPrefixHelper } from "@server/utils/RedisPrefixHelper";
 import { ValidationError } from "../errors";
 import Attachment from "./Attachment";
 import AuthenticationProvider from "./AuthenticationProvider";
 import Collection from "./Collection";
 import Group from "./Group";
+import GroupUser from "./GroupUser";
 import Team from "./Team";
 import UserAuthentication from "./UserAuthentication";
 import UserMembership from "./UserMembership";
+import UserPasskey from "./UserPasskey";
 import ParanoidModel from "./base/ParanoidModel";
 import Encrypted from "./decorators/Encrypted";
 import Fix from "./decorators/Fix";
 import IsUrlOrRelativePath from "./validators/IsUrlOrRelativePath";
 import Length from "./validators/Length";
 import NotContainsUrl from "./validators/NotContainsUrl";
+import { SkipChangeset } from "./decorators/Changeset";
 
 /**
  * Flags that are available for setting on the user.
@@ -74,6 +83,8 @@ export enum UserFlag {
   Desktop = "desktop",
   DesktopWeb = "desktopWeb",
   MobileWeb = "mobileWeb",
+  MCP = "mcp",
+  AvatarUpdated = "avatarUpdated",
 }
 
 @Scopes(() => ({
@@ -128,12 +139,20 @@ class User extends ParanoidModel<
   Partial<InferCreationAttributes<User>>
 > {
   @IsEmail
-  @Length({ max: 255, msg: "User email must be 255 characters or less" })
+  @Length({
+    min: 1,
+    max: UserValidation.maxEmailLength,
+    msg: `User email must be between 1 and ${UserValidation.maxEmailLength} characters`,
+  })
   @Column
   email: string | null;
 
   @NotContainsUrl
-  @Length({ max: 255, msg: "User name must be 255 characters or less" })
+  @Length({
+    min: 1,
+    max: UserValidation.maxNameLength,
+    msg: `User name must be between 1 and ${UserValidation.maxNameLength} characters`,
+  })
   @Column
   name: string;
 
@@ -147,22 +166,39 @@ class User extends ParanoidModel<
 
   @IsDate
   @Column
+  @SkipChangeset
   lastActiveAt: Date | null;
 
   @IsIP
-  @Column
-  lastActiveIp: string | null;
+  @SkipChangeset
+  @Column(DataType.STRING)
+  get lastActiveIp(): string | null {
+    return this.getDataValue("lastActiveIp");
+  }
+
+  set lastActiveIp(value: string | null) {
+    this.setDataValue("lastActiveIp", normalizeIp(value));
+  }
 
   @IsDate
   @Column
+  @SkipChangeset
   lastSignedInAt: Date | null;
 
   @IsIP
-  @Column
-  lastSignedInIp: string | null;
+  @SkipChangeset
+  @Column(DataType.STRING)
+  get lastSignedInIp(): string | null {
+    return this.getDataValue("lastSignedInIp");
+  }
+
+  set lastSignedInIp(value: string | null) {
+    this.setDataValue("lastSignedInIp", normalizeIp(value));
+  }
 
   @IsDate
   @Column
+  @SkipChangeset
   lastSigninEmailSentAt: Date | null;
 
   @IsDate
@@ -230,6 +266,9 @@ class User extends ParanoidModel<
 
   @HasMany(() => UserAuthentication)
   authentications: UserAuthentication[];
+
+  @HasMany(() => UserPasskey)
+  passkeys: UserPasskey[];
 
   // getters
 
@@ -389,7 +428,10 @@ class User extends ParanoidModel<
    * @param value Sets the preference value
    * @returns The current user preferences
    */
-  public setPreference = (preference: UserPreference, value: boolean) => {
+  public setPreference = <K extends UserPreference>(
+    preference: K,
+    value: NonNullable<UserPreferences[K]>
+  ) => {
     if (!this.preferences) {
       this.preferences = {};
     }
@@ -406,10 +448,12 @@ class User extends ParanoidModel<
    * @param preference The user preference to retrieve
    * @returns The preference value if set, else the default value.
    */
-  public getPreference = (preference: UserPreference) =>
-    this.preferences?.[preference] ??
-    UserPreferenceDefaults[preference] ??
-    false;
+  public getPreference = <K extends UserPreference>(
+    preference: K
+  ): NonNullable<UserPreferences[K]> =>
+    (this.preferences?.[preference] ??
+      UserPreferenceDefaults[preference] ??
+      false) as NonNullable<UserPreferences[K]>;
 
   /**
    * Returns the user's active groups.
@@ -444,28 +488,82 @@ class User extends ParanoidModel<
    * @returns An array of collection ids
    */
   public collectionIds = async (options: FindOptions<Collection> = {}) => {
-    const collectionStubs = await Collection.scope({
-      method: ["withMembership", this.id],
-    }).findAll({
-      attributes: ["id", "permission"],
-      where: {
-        teamId: this.teamId,
-      },
-      paranoid: true,
-      ...options,
-    });
+    const hasOptions =
+      options.transaction || options.paranoid === false || options.lock;
 
-    return collectionStubs
-      .filter(
-        (c) =>
-          (Object.values(CollectionPermission).includes(
-            c.permission as CollectionPermission
-          ) &&
-            !this.isGuest) ||
-          c.memberships.length > 0 ||
-          c.groupMemberships.length > 0
-      )
-      .map((c) => c.id);
+    const fetchCollectionIds = async () => {
+      const collectionStubs = await Collection.findAll({
+        attributes: ["id"],
+        where: {
+          teamId: this.teamId,
+          [Op.or]: [
+            ...(this.isGuest
+              ? []
+              : [
+                  {
+                    permission: {
+                      [Op.in]: Object.values(CollectionPermission),
+                    },
+                  },
+                ]),
+            {
+              "$memberships.id$": { [Op.ne]: null },
+            },
+            {
+              "$groupMemberships.id$": { [Op.ne]: null },
+            },
+          ],
+        },
+        include: [
+          {
+            association: "memberships",
+            attributes: [],
+            required: false,
+            where: {
+              userId: this.id,
+            },
+          },
+          {
+            association: "groupMemberships",
+            attributes: [],
+            required: false,
+            include: [
+              {
+                association: "group",
+                attributes: [],
+                required: true,
+                include: [
+                  {
+                    association: "groupUsers",
+                    attributes: [],
+                    required: true,
+                    where: {
+                      userId: this.id,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+        paranoid: true,
+        ...options,
+      });
+
+      return Array.from(new Set(collectionStubs.map((c) => c.id)));
+    };
+
+    if (hasOptions) {
+      return fetchCollectionIds();
+    }
+
+    return (
+      (await CacheHelper.getDataOrSet<string[]>(
+        RedisPrefixHelper.getUserCollectionIdsKey(this.id),
+        fetchCollectionIds,
+        10
+      )) ?? []
+    );
   };
 
   updateActiveAt = async (ctx: Context, force = false) => {
@@ -494,13 +592,13 @@ class User extends ParanoidModel<
     });
   };
 
-  updateSignedIn = (ip: string) => {
+  updateSignedIn = (ctx: Context | APIContext) => {
     const now = new Date();
     this.lastActiveAt = now;
-    this.lastActiveIp = ip;
+    this.lastActiveIp = ctx.request.ip;
     this.lastSignedInAt = now;
-    this.lastSignedInIp = ip;
-    return this.save({ hooks: false });
+    this.lastSignedInIp = ctx.request.ip;
+    return this.save({ hooks: false, transaction: ctx.state.transaction });
   };
 
   /**
@@ -520,14 +618,16 @@ class User extends ParanoidModel<
    * in the client browser cookies to remain logged in.
    *
    * @param expiresAt The time the token will expire at
+   * @param service The authentication service used to generate the token, if applicable
    * @returns The session token
    */
-  getJwtToken = (expiresAt?: Date) =>
+  getSessionToken = (expiresAt?: Date, service?: string) =>
     JWT.sign(
       {
         id: this.id,
         expiresAt: expiresAt ? expiresAt.toISOString() : undefined,
         type: "session",
+        service,
       },
       this.jwtSecret
     );
@@ -553,15 +653,17 @@ class User extends ParanoidModel<
    * between subdomains or domains. It has a short expiry and can only be used
    * once.
    *
+   * @param The authentication service used to generate the token, if applicable
    * @returns The transfer token
    */
-  getTransferToken = () =>
+  getTransferToken = (service?: string) =>
     JWT.sign(
       {
         id: this.id,
         createdAt: new Date().toISOString(),
         expiresAt: addMinutes(new Date(), 1).toISOString(),
         type: "transfer",
+        service,
       },
       this.jwtSecret
     );
@@ -570,17 +672,35 @@ class User extends ParanoidModel<
    * Returns a temporary token that is only used for logging in from an email
    * It can only be used to sign in once and has a medium length expiry
    *
+   * @param ctx The request context, used to get the IP address of the request
    * @returns The email signin token
    */
-  getEmailSigninToken = () =>
+  getEmailSigninToken = (ctx: Context) =>
     JWT.sign(
       {
         id: this.id,
+        ip: ctx.request.ip,
         createdAt: new Date().toISOString(),
         type: "email-signin",
       },
       this.jwtSecret
     );
+
+  /**
+   * Generate a 6-digit verification code for email authentication
+   * and store it in Redis with a 10-minute TTL.
+   *
+   * @returns The 6-digit verification code
+   */
+  getEmailVerificationCode = async (): Promise<string> => {
+    if (!this.email) {
+      throw ValidationError("Email is required");
+    }
+
+    const code = VerificationCode.generate();
+    await VerificationCode.store(this.teamId, this.email, code);
+    return code;
+  };
 
   /**
    * Returns a temporary token that can be used to update the users
@@ -618,6 +738,52 @@ class User extends ParanoidModel<
     });
 
   // hooks
+
+  @BeforeDestroy
+  static async checkLastUser(
+    model: User,
+    { transaction }: { transaction: Transaction }
+  ) {
+    const usersCount = await this.count({
+      where: {
+        teamId: model.teamId,
+      },
+      transaction,
+    });
+
+    if (usersCount === 1) {
+      throw ValidationError(
+        "Cannot delete last user on the team, delete the workspace instead."
+      );
+    }
+  }
+
+  @BeforeDestroy
+  static async checkLastAdmin(
+    model: User,
+    { transaction }: { transaction: Transaction }
+  ) {
+    if (model.role !== UserRole.Admin) {
+      return;
+    }
+
+    const otherAdminsCount = await this.count({
+      where: {
+        teamId: model.teamId,
+        role: UserRole.Admin,
+        id: {
+          [Op.ne]: model.id,
+        },
+      },
+      transaction,
+    });
+
+    if (otherAdminsCount === 0) {
+      throw ValidationError(
+        "Cannot delete account as only admin. Please make another user admin and try again."
+      );
+    }
+  }
 
   @BeforeDestroy
   static removeIdentifyingInfo = async (
@@ -683,7 +849,7 @@ class User extends ParanoidModel<
       previousRole &&
       model.changed("role") &&
       UserRoleHelper.isRoleLower(model.role, UserRole.Member) &&
-      UserRoleHelper.isRoleHigher(previousRole, UserRole.Viewer)
+      !UserRoleHelper.isRoleLower(previousRole, UserRole.Viewer)
     ) {
       await UserMembership.update(
         {
@@ -696,6 +862,50 @@ class User extends ParanoidModel<
           },
         }
       );
+    }
+  }
+
+  // When a user's suspension state changes, invalidate the cached member count
+  // for every group they belong to so the count reflects only active members.
+  @AfterUpdate
+  static async invalidateGroupMemberCount(
+    model: User,
+    options: InstanceUpdateOptions<InferAttributes<User>>
+  ) {
+    if (!model.changed("suspendedAt")) {
+      return;
+    }
+
+    const groupUsers = await GroupUser.findAll({
+      attributes: ["groupId"],
+      where: { userId: model.id },
+      transaction: options.transaction,
+      raw: true,
+    });
+
+    const groupIds = [
+      ...new Set(groupUsers.map((groupUser) => groupUser.groupId)),
+    ];
+
+    if (!groupIds.length) {
+      return;
+    }
+
+    const invalidate = async () => {
+      await Promise.all(
+        groupIds.map((groupId) =>
+          CacheHelper.removeData(
+            RedisPrefixHelper.getCounterCacheKey("Group", "members", groupId)
+          )
+        )
+      );
+    };
+
+    if (options.transaction) {
+      const transaction = options.transaction.parent || options.transaction;
+      transaction.afterCommit(invalidate);
+    } else {
+      await invalidate();
     }
   }
 
@@ -717,7 +927,7 @@ class User extends ParanoidModel<
       });
 
       if (attachment) {
-        await DeleteAttachmentTask.schedule({
+        await new DeleteAttachmentTask().schedule({
           attachmentId: attachment.id,
           teamId: model.teamId,
         });
@@ -725,17 +935,21 @@ class User extends ParanoidModel<
     }
   };
 
-  static findByEmail = async function (ctx: APIContext, email: string) {
+  static findByEmail = async function (
+    this: typeof User,
+    ctx: APIContext,
+    email: string
+  ) {
     return this.findOne({
       where: {
-        teamId: ctx.context.auth.user.teamId,
+        teamId: ctx.state.auth.user.teamId,
         email: email.trim().toLowerCase(),
       },
       ...ctx.context,
     });
   };
 
-  static getCounts = async function (teamId: string) {
+  static getCounts = async function (this: typeof User, teamId: string) {
     const countSql = `
       SELECT
         COUNT(CASE WHEN "suspendedAt" IS NOT NULL THEN 1 END) as "suspendedCount",
@@ -748,7 +962,14 @@ class User extends ParanoidModel<
       WHERE "deletedAt" IS NULL
       AND "teamId" = :teamId
     `;
-    const [results] = await this.sequelize.query(countSql, {
+    const [counts] = await this.sequelize!.query<{
+      activeCount: string;
+      adminCount: string;
+      invitedCount: string;
+      suspendedCount: string;
+      viewerCount: string;
+      count: string;
+    }>(countSql, {
       type: QueryTypes.SELECT,
       replacements: {
         teamId,
@@ -756,15 +977,6 @@ class User extends ParanoidModel<
         roleViewer: UserRole.Viewer,
       },
     });
-
-    const counts: {
-      activeCount: string;
-      adminCount: string;
-      invitedCount: string;
-      suspendedCount: string;
-      viewerCount: string;
-      count: string;
-    } = results;
 
     return {
       active: parseInt(counts.activeCount),

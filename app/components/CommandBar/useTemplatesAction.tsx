@@ -1,34 +1,37 @@
 import { NewDocumentIcon, ShapesIcon } from "outline-icons";
-import * as React from "react";
+import { useEffect, useMemo } from "react";
 import Icon from "@shared/components/Icon";
-import { createAction } from "~/actions";
+import { createActionWithChildren, createInternalLinkAction } from "~/actions";
 import {
   ActiveCollectionSection,
   DocumentSection,
   TeamSection,
 } from "~/actions/sections";
 import useStores from "~/hooks/useStores";
-import history from "~/utils/history";
 import { newDocumentPath } from "~/utils/routeHelpers";
 
 const useTemplatesAction = () => {
-  const { documents } = useStores();
+  const { templates } = useStores();
 
-  React.useEffect(() => {
-    void documents.fetchAllTemplates();
-  }, [documents]);
+  useEffect(() => {
+    void templates.fetchAll();
+  }, [templates]);
 
-  const actions = React.useMemo(
+  const actions = useMemo(
     () =>
-      documents.templatesAlphabetical.map((template) =>
-        createAction({
+      templates.alphabetical.map((template) =>
+        createInternalLinkAction({
           name: template.titleWithDefault,
           analyticsName: "New document",
           section: template.isWorkspaceTemplate
             ? TeamSection
             : ActiveCollectionSection,
           icon: template.icon ? (
-            <Icon value={template.icon} color={template.color ?? undefined} />
+            <Icon
+              value={template.icon}
+              initial={template.initial}
+              color={template.color ?? undefined}
+            />
           ) : (
             <NewDocumentIcon />
           ),
@@ -47,23 +50,28 @@ const useTemplatesAction = () => {
               template.isWorkspaceTemplate
             );
           },
-          perform: ({ activeCollectionId, sidebarContext }) =>
-            history.push(
-              newDocumentPath(template.collectionId ?? activeCollectionId, {
-                templateId: template.id,
-              }),
+          to: ({ activeCollectionId, sidebarContext }) => {
+            const [pathname, search] = newDocumentPath(
+              template.collectionId ?? activeCollectionId,
               {
-                sidebarContext,
+                templateId: template.id,
               }
-            ),
+            ).split("?");
+
+            return {
+              pathname,
+              search,
+              state: { sidebarContext },
+            };
+          },
         })
       ),
-    [documents.templatesAlphabetical]
+    [templates.alphabetical]
   );
 
-  const newFromTemplate = React.useMemo(
+  const newFromTemplate = useMemo(
     () =>
-      createAction({
+      createActionWithChildren({
         id: "templates",
         name: ({ t }) => t("New from template"),
         placeholder: ({ t }) => t("Choose a template"),
@@ -78,7 +86,7 @@ const useTemplatesAction = () => {
             stores.policies.abilities(currentTeamId).createDocument
           );
         },
-        children: () => actions,
+        children: actions,
       }),
     [actions]
   );

@@ -1,11 +1,13 @@
-import { createReadStream } from "fs";
-import path from "path";
-import { File } from "formidable";
-import {
+import { createReadStream } from "node:fs";
+import path from "node:path";
+import type { File } from "formidable";
+import type {
   InferAttributes,
   InferCreationAttributes,
-  QueryTypes,
+  FindOptions,
+  Sequelize,
 } from "sequelize";
+import { QueryTypes } from "sequelize";
 import {
   BeforeDestroy,
   BelongsTo,
@@ -19,6 +21,7 @@ import {
   BeforeCreate,
   BeforeUpdate,
 } from "sequelize-typescript";
+import { errToString } from "@shared/utils/error";
 import { ValidationError } from "@server/errors";
 import FileStorage from "@server/storage/files";
 import { ValidateKey } from "@server/validation";
@@ -29,6 +32,8 @@ import IdModel from "./base/IdModel";
 import { SkipChangeset } from "./decorators/Changeset";
 import Fix from "./decorators/Fix";
 import Length from "./validators/Length";
+import Logger from "@server/logging/Logger";
+import { Buckets } from "./helpers/AttachmentHelper";
 
 @Table({ tableName: "attachments", modelName: "attachment" })
 @Fix
@@ -73,6 +78,17 @@ class Attachment extends IdModel<
    */
   get name() {
     return path.parse(this.key).base;
+  }
+
+  /**
+   * Whether the attachment is stored in a public bucket. This does not relate
+   * to the ACL of the attachment itself. Previously "public" attachments were
+   * stored in a separate bucket – now all attachments are stored in a private
+   * bucket and ACL is checked per attachment.
+   */
+  get isStoredInPublicBucket() {
+    const bucket = this.key.split("/")[0];
+    return [Buckets.avatars, Buckets.public].includes(bucket as Buckets);
   }
 
   /**
@@ -159,19 +175,49 @@ class Attachment extends IdModel<
 
   @BeforeDestroy
   static async deleteAttachmentFromS3(model: Attachment) {
-    await FileStorage.deleteFile(model.key);
+    try {
+      await FileStorage.deleteFile(model.key);
+    } catch (err) {
+      // do not block deletion of the database record if S3 deletion fails
+      Logger.warn(
+        `Failed to delete attachment file ${model.key} from storage`,
+        {
+          id: model.id,
+          teamId: model.teamId,
+          message: errToString(err),
+        }
+      );
+    }
   }
 
   // static methods
 
   /**
+   * Find an attachment by its key.
+   *
+   * @param key - The key of the attachment to find.
+   * @param options - Additional options for the query.
+   * @returns A promise resolving to the attachment with the given key, or null if not found.
+   */
+  static async findByKey(
+    key: string,
+    options?: FindOptions<Attachment>
+  ): Promise<Attachment | null> {
+    return this.findOne({ where: { key }, ...options });
+  }
+
+  /**
    * Get the total size of all attachments for a given team.
    *
+   * @param connection - The Sequelize connection to use for the query.
    * @param teamId - The ID of the team to get the total size for.
    * @returns A promise resolving to the total size of all attachments for the given team in bytes.
    */
-  static async getTotalSizeForTeam(teamId: string): Promise<number> {
-    const result = await this.sequelize!.query<{ total: string }>(
+  static async getTotalSizeForTeam(
+    connection: Sequelize,
+    teamId: string
+  ): Promise<number> {
+    const result = await connection.query<{ total: string }>(
       `
       SELECT SUM(size) as total
       FROM attachments

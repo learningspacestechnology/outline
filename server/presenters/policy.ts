@@ -1,6 +1,6 @@
-import compact from "lodash/compact";
+import { compact } from "es-toolkit/compat";
 import { traceFunction } from "@server/logging/tracing";
-import { User } from "@server/models";
+import type { User } from "@server/models";
 import { serialize } from "../policies";
 
 type Policy = {

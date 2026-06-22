@@ -1,12 +1,13 @@
-import emojiRegex from "emoji-regex";
-import isEmpty from "lodash/isEmpty";
+import { isEmpty } from "es-toolkit/compat";
 import { z } from "zod";
 import { CommentStatusFilter } from "@shared/types";
+import { commentSchema } from "@server/editor";
 import { BaseSchema, ProsemirrorSchema } from "@server/routes/api/schema";
+import { zodEmojiType } from "@server/utils/zod";
 
 const BaseIdSchema = z.object({
   /** Comment Id */
-  id: z.string().uuid(),
+  id: z.uuid(),
 });
 
 const CommentsSortParamsSchema = z.object({
@@ -14,7 +15,7 @@ const CommentsSortParamsSchema = z.object({
   sort: z
     .string()
     .refine((val) => ["createdAt", "updatedAt"].includes(val))
-    .default("createdAt"),
+    .prefault("createdAt"),
 
   /** Specifies the sort order with respect to sort field */
   direction: z
@@ -27,23 +28,47 @@ export const CommentsCreateSchema = BaseSchema.extend({
   body: z
     .object({
       /** Allow creation with a specific ID */
-      id: z.string().uuid().optional(),
+      id: z.uuid().optional(),
 
       /** Create comment for this document */
-      documentId: z.string().uuid(),
+      documentId: z.uuid(),
 
       /** Create comment under this parent */
-      parentCommentId: z.string().uuid().optional(),
+      parentCommentId: z.uuid().optional(),
 
       /** Create comment with this data */
-      data: ProsemirrorSchema().optional(),
+      data: ProsemirrorSchema({ schema: commentSchema }).optional(),
 
       /** Create comment with this text */
       text: z.string().optional(),
+
+      /**
+       * Plain text substring to anchor the comment to as an inline comment.
+       * The first occurrence in the document's plain text is used.
+       */
+      anchorText: z.string().optional(),
+
+      /**
+       * Plain text immediately preceding `anchorText` in the document, used
+       * to select a specific occurrence when `anchorText` is ambiguous.
+       */
+      anchorPrefix: z.string().optional(),
+
+      /**
+       * Plain text immediately following `anchorText` in the document, used
+       * to select a specific occurrence when `anchorText` is ambiguous.
+       */
+      anchorSuffix: z.string().optional(),
     })
     .refine((obj) => !(isEmpty(obj.data) && isEmpty(obj.text)), {
-      message: "One of data or text is required",
-    }),
+      error: "One of data or text is required",
+    })
+    .refine(
+      (obj) => !((obj.anchorPrefix || obj.anchorSuffix) && !obj.anchorText),
+      {
+        error: "anchorPrefix and anchorSuffix require anchorText",
+      }
+    ),
 });
 
 export type CommentsCreateReq = z.infer<typeof CommentsCreateSchema>;
@@ -51,7 +76,7 @@ export type CommentsCreateReq = z.infer<typeof CommentsCreateSchema>;
 export const CommentsUpdateSchema = BaseSchema.extend({
   body: BaseIdSchema.extend({
     /** Update comment with this data */
-    data: ProsemirrorSchema(),
+    data: ProsemirrorSchema({ schema: commentSchema }),
   }),
 });
 
@@ -70,9 +95,9 @@ export const CommentsListSchema = BaseSchema.extend({
     /** Id of a collection to list comments for */
     collectionId: z.string().optional(),
     /** Id of a parent comment to list comments for */
-    parentCommentId: z.string().uuid().optional(),
+    parentCommentId: z.uuid().optional(),
     /** Comment statuses to include in results */
-    statusFilter: z.nativeEnum(CommentStatusFilter).array().optional(),
+    statusFilter: z.enum(CommentStatusFilter).array().optional(),
     /** Whether to include anchor text, if it exists */
     includeAnchorText: z.boolean().optional(),
   }),
@@ -104,7 +129,7 @@ export type CommentsUnresolveReq = z.infer<typeof CommentsUnresolveSchema>;
 export const CommentsReactionSchema = z.object({
   body: BaseIdSchema.extend({
     /**  Emoji that's added to (or) removed from a comment as a reaction. */
-    emoji: z.string().regex(emojiRegex()),
+    emoji: zodEmojiType(),
   }),
 });
 

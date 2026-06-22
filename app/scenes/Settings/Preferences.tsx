@@ -4,11 +4,16 @@ import * as React from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { languageOptions as availableLanguages } from "@shared/i18n";
-import { TeamPreference, UserPreference } from "@shared/types";
+import {
+  NotificationBadgeType,
+  TeamPreference,
+  UserPreference,
+} from "@shared/types";
 import { Theme } from "~/stores/UiStore";
 import Button from "~/components/Button";
 import Heading from "~/components/Heading";
-import { InputSelectNew, Option } from "~/components/InputSelectNew";
+import type { Option } from "~/components/InputSelect";
+import { InputSelect } from "~/components/InputSelect";
 import Scene from "~/components/Scene";
 import Switch from "~/components/Switch";
 import Text from "~/components/Text";
@@ -17,6 +22,7 @@ import useCurrentUser from "~/hooks/useCurrentUser";
 import usePolicy from "~/hooks/usePolicy";
 import useStores from "~/hooks/useStores";
 import UserDelete from "../UserDelete";
+import { AutoLaunchSetting } from "./components/AutoLaunchSetting";
 import SettingRow from "./components/SettingRow";
 
 function Preferences() {
@@ -34,7 +40,7 @@ function Preferences() {
             type: "item",
             label: lang.label,
             value: lang.value,
-          } satisfies Option)
+          }) satisfies Option
       ),
     []
   );
@@ -49,16 +55,83 @@ function Preferences() {
     [t]
   );
 
-  const handlePreferenceChange =
-    (inverted = false) =>
-    async (ev: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUseCursorPointerChange = React.useCallback(
+    async (checked: boolean) => {
+      user.setPreference(UserPreference.UseCursorPointer, checked);
+      await user.save();
+      toast.success(t("Preferences saved"));
+    },
+    [user, t]
+  );
+
+  const handleCodeBlockLineNumbersChange = React.useCallback(
+    async (checked: boolean) => {
+      user.setPreference(UserPreference.CodeBlockLineNumers, checked);
+      await user.save();
+      toast.success(t("Preferences saved"));
+    },
+    [user, t]
+  );
+
+  const handleSeamlessEditChange = React.useCallback(
+    async (checked: boolean) => {
+      user.setPreference(UserPreference.SeamlessEdit, !checked);
+      await user.save();
+      toast.success(t("Preferences saved"));
+    },
+    [user, t]
+  );
+
+  const handleRememberLastPathChange = React.useCallback(
+    async (checked: boolean) => {
+      user.setPreference(UserPreference.RememberLastPath, checked);
+      await user.save();
+      toast.success(t("Preferences saved"));
+    },
+    [user, t]
+  );
+
+  const handleEnableSmartTextChange = React.useCallback(
+    async (checked: boolean) => {
+      user.setPreference(UserPreference.EnableSmartText, checked);
+      await user.save();
+      toast.success(t("Preferences saved"));
+    },
+    [user, t]
+  );
+
+  const notificationBadgeOptions: Option[] = React.useMemo(
+    () => [
+      {
+        type: "item",
+        label: t("Disabled"),
+        value: NotificationBadgeType.Disabled,
+      },
+      {
+        type: "item",
+        label: t("Unread count"),
+        value: NotificationBadgeType.Count,
+      },
+      {
+        type: "item",
+        label: t("Unread indicator"),
+        value: NotificationBadgeType.Indicator,
+      },
+    ],
+    [t]
+  );
+
+  const handleNotificationBadgeChange = React.useCallback(
+    async (value: string) => {
       user.setPreference(
-        ev.target.name as UserPreference,
-        inverted ? !ev.target.checked : ev.target.checked
+        UserPreference.NotificationBadge,
+        value as NotificationBadgeType
       );
       await user.save();
       toast.success(t("Preferences saved"));
-    };
+    },
+    [user, t]
+  );
 
   const handleLanguageChange = React.useCallback(
     async (language: string) => {
@@ -111,13 +184,12 @@ function Preferences() {
           </>
         }
       >
-        <InputSelectNew
+        <InputSelect
           options={languageOptions}
           value={user.language}
           onChange={handleLanguageChange}
-          ariaLabel={t("Language")}
           label={t("Language")}
-          hideLabel
+          labelHidden
         />
       </SettingRow>
       <SettingRow
@@ -125,13 +197,12 @@ function Preferences() {
         label={t("Appearance")}
         description={t("Choose your preferred interface color scheme.")}
       >
-        <InputSelectNew
+        <InputSelect
           options={themeOptions}
           value={ui.theme}
           onChange={handleThemeChange}
-          ariaLabel={t("Appearance")}
           label={t("Appearance")}
-          hideLabel
+          labelHidden
         />
       </SettingRow>
       <SettingRow
@@ -145,7 +216,7 @@ function Preferences() {
           id={UserPreference.UseCursorPointer}
           name={UserPreference.UseCursorPointer}
           checked={user.getPreference(UserPreference.UseCursorPointer)}
-          onChange={handlePreferenceChange(false)}
+          onChange={handleUseCursorPointerChange}
         />
       </SettingRow>
       <SettingRow
@@ -158,7 +229,7 @@ function Preferences() {
           id={UserPreference.CodeBlockLineNumers}
           name={UserPreference.CodeBlockLineNumers}
           checked={user.getPreference(UserPreference.CodeBlockLineNumers)}
-          onChange={handlePreferenceChange(false)}
+          onChange={handleCodeBlockLineNumbersChange}
         />
       </SettingRow>
 
@@ -179,7 +250,7 @@ function Preferences() {
               team.getPreference(TeamPreference.SeamlessEdit)
             )
           }
-          onChange={handlePreferenceChange(true)}
+          onChange={handleSeamlessEditChange}
         />
       </SettingRow>
       <SettingRow
@@ -193,11 +264,10 @@ function Preferences() {
           id={UserPreference.RememberLastPath}
           name={UserPreference.RememberLastPath}
           checked={!!user.getPreference(UserPreference.RememberLastPath)}
-          onChange={handlePreferenceChange(false)}
+          onChange={handleRememberLastPathChange}
         />
       </SettingRow>
       <SettingRow
-        border={false}
         name={UserPreference.EnableSmartText}
         label={t("Smart text replacements")}
         description={t(
@@ -208,7 +278,24 @@ function Preferences() {
           id={UserPreference.EnableSmartText}
           name={UserPreference.EnableSmartText}
           checked={!!user.getPreference(UserPreference.EnableSmartText)}
-          onChange={handlePreferenceChange(false)}
+          onChange={handleEnableSmartTextChange}
+        />
+      </SettingRow>
+      <AutoLaunchSetting />
+      <SettingRow
+        border={false}
+        name={UserPreference.NotificationBadge}
+        label={t("Notification badge")}
+        description={t(
+          "Choose how unread notifications are indicated on the app icon."
+        )}
+      >
+        <InputSelect
+          options={notificationBadgeOptions}
+          value={user.getPreference(UserPreference.NotificationBadge)}
+          onChange={handleNotificationBadgeChange}
+          label={t("Notification badge")}
+          labelHidden
         />
       </SettingRow>
 

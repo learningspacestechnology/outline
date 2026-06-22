@@ -1,19 +1,23 @@
-import find from "lodash/find";
+import { find } from "es-toolkit/compat";
 import { observer } from "mobx-react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { useTranslation, Trans } from "react-i18next";
 import { toast } from "sonner";
+import { errToString } from "@shared/utils/error";
 import { IntegrationType, IntegrationService } from "@shared/types";
-import Integration from "~/models/Integration";
+import type Integration from "~/models/Integration";
+import { IntegrationScene } from "~/scenes/Settings/components/IntegrationScene";
 import SettingRow from "~/scenes/Settings/components/SettingRow";
 import Button from "~/components/Button";
 import Heading from "~/components/Heading";
 import GoogleIcon from "~/components/Icons/GoogleIcon";
 import Input from "~/components/Input";
-import Scene from "~/components/Scene";
 import Text from "~/components/Text";
 import useStores from "~/hooks/useStores";
+import { disconnectAnalyticsIntegrationFactory } from "~/actions/definitions/integrations";
+import Flex from "~/components/Flex";
+import styled from "styled-components";
 
 type FormData = {
   measurementId: string;
@@ -28,6 +32,8 @@ function GoogleAnalytics() {
     service: IntegrationService.GoogleAnalytics,
   }) as Integration<IntegrationType.Analytics> | undefined;
 
+  const measurementId = integration?.settings.measurementId;
+
   const {
     register,
     reset,
@@ -36,46 +42,36 @@ function GoogleAnalytics() {
   } = useForm<FormData>({
     mode: "all",
     defaultValues: {
-      measurementId: integration?.settings.measurementId,
+      measurementId,
     },
   });
 
   React.useEffect(() => {
-    void integrations.fetchPage({
-      type: IntegrationType.Analytics,
-    });
-  }, [integrations]);
-
-  React.useEffect(() => {
-    reset({ measurementId: integration?.settings.measurementId });
-  }, [integration, reset]);
+    reset({ measurementId });
+  }, [reset, measurementId]);
 
   const handleSubmit = React.useCallback(
     async (data: FormData) => {
       try {
-        if (data.measurementId) {
-          await integrations.save({
-            id: integration?.id,
-            type: IntegrationType.Analytics,
-            service: IntegrationService.GoogleAnalytics,
-            settings: {
-              measurementId: data.measurementId,
-            },
-          });
-        } else {
-          await integration?.delete();
-        }
+        await integrations.save({
+          id: integration?.id,
+          type: IntegrationType.Analytics,
+          service: IntegrationService.GoogleAnalytics,
+          settings: {
+            measurementId: data.measurementId,
+          },
+        });
 
         toast.success(t("Settings saved"));
       } catch (err) {
-        toast.error(err.message);
+        toast.error(errToString(err));
       }
     },
     [integrations, integration, t]
   );
 
   return (
-    <Scene title={t("Google Analytics")} icon={<GoogleIcon />}>
+    <IntegrationScene title={t("Google Analytics")} icon={<GoogleIcon />}>
       <Heading>{t("Google Analytics")}</Heading>
 
       <Text as="p" type="secondary">
@@ -93,15 +89,43 @@ function GoogleAnalytics() {
           )}
           border={false}
         >
-          <Input placeholder="G-XXXXXXXXX1" {...register("measurementId")} />
+          <Input
+            placeholder="G-XXXXXXXXX1"
+            {...register("measurementId", { required: true })}
+          />
         </SettingRow>
 
-        <Button type="submit" disabled={formState.isSubmitting}>
-          {formState.isSubmitting ? `${t("Saving")}…` : t("Save")}
-        </Button>
+        <Actions reverse justify="end" gap={8}>
+          <StyledSubmit
+            type="submit"
+            disabled={
+              !formState.isDirty || !formState.isValid || formState.isSubmitting
+            }
+          >
+            {formState.isSubmitting ? `${t("Saving")}…` : t("Save")}
+          </StyledSubmit>
+
+          <Button
+            action={disconnectAnalyticsIntegrationFactory(integration)}
+            disabled={formState.isSubmitting}
+            neutral
+            hideIcon
+            hideOnActionDisabled
+          >
+            {t("Disconnect")}
+          </Button>
+        </Actions>
       </form>
-    </Scene>
+    </IntegrationScene>
   );
 }
+
+const Actions = styled(Flex)`
+  margin-top: 8px;
+`;
+
+const StyledSubmit = styled(Button)`
+  width: 80px;
+`;
 
 export default observer(GoogleAnalytics);

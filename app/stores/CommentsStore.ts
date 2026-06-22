@@ -1,14 +1,10 @@
 import invariant from "invariant";
-import compact from "lodash/compact";
-import differenceBy from "lodash/differenceBy";
-import keyBy from "lodash/keyBy";
-import orderBy from "lodash/orderBy";
-import uniq from "lodash/uniq";
+import { compact, differenceBy, keyBy, orderBy, uniq } from "es-toolkit/compat";
 import { action, computed } from "mobx";
 import Comment from "~/models/Comment";
-import { CommentSortOption, CommentSortType } from "~/types";
+import { type CommentSortOption, CommentSortType } from "~/types";
 import { client } from "~/utils/ApiClient";
-import RootStore from "./RootStore";
+import type RootStore from "./RootStore";
 import Store from "./base/Store";
 
 export default class CommentsStore extends Store<Comment> {
@@ -91,7 +87,7 @@ export default class CommentsStore extends Store<Comment> {
   }
 
   /**
-   * Returns the total number of unresolbed comments in the given document.
+   * Returns the total number of unresolved comments in the given document.
    *
    * @param documentId ID of the document to get comments for
    * @returns A number of comments

@@ -1,6 +1,6 @@
 import { subHours, subMinutes } from "date-fns";
 import Router from "koa-router";
-import uniqBy from "lodash/uniqBy";
+import { uniqBy } from "es-toolkit/compat";
 import { TeamPreference } from "@shared/types";
 import { parseDomain } from "@shared/utils/domains";
 import env from "@server/env";
@@ -18,9 +18,10 @@ import {
   presentGroupUser,
 } from "@server/presenters";
 import ValidateSSOAccessTask from "@server/queues/tasks/ValidateSSOAccessTask";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
 import { getSessionsInCookie } from "@server/utils/authentication";
-import * as T from "./schema";
+import RateLimiter from "@server/utils/RateLimiter";
+import type * as T from "./schema";
 
 const router = new Router();
 
@@ -41,7 +42,7 @@ router.post("auth.config", async (ctx: APIContext<T.AuthConfigReq>) => {
           logo: team.getPreference(TeamPreference.PublicBranding)
             ? team.avatarUrl
             : undefined,
-          providers: AuthenticationHelper.providersForTeam(team).map(
+          providers: (await AuthenticationHelper.providersForTeam(team)).map(
             presentProviderConfig
           ),
         },
@@ -55,7 +56,7 @@ router.post("auth.config", async (ctx: APIContext<T.AuthConfigReq>) => {
   if (domain.custom) {
     const team = await Team.scope("withAuthenticationProviders").findOne({
       where: {
-        domain: ctx.request.hostname,
+        domain: ctx.request.hostname.toLowerCase(),
       },
     });
 
@@ -68,7 +69,7 @@ router.post("auth.config", async (ctx: APIContext<T.AuthConfigReq>) => {
             ? team.avatarUrl
             : undefined,
           hostname: ctx.request.hostname,
-          providers: AuthenticationHelper.providersForTeam(team).map(
+          providers: (await AuthenticationHelper.providersForTeam(team)).map(
             presentProviderConfig
           ),
         },
@@ -95,7 +96,7 @@ router.post("auth.config", async (ctx: APIContext<T.AuthConfigReq>) => {
             ? team.avatarUrl
             : undefined,
           hostname: ctx.request.hostname,
-          providers: AuthenticationHelper.providersForTeam(team).map(
+          providers: (await AuthenticationHelper.providersForTeam(team)).map(
             presentProviderConfig
           ),
         },
@@ -107,15 +108,18 @@ router.post("auth.config", async (ctx: APIContext<T.AuthConfigReq>) => {
   // Otherwise, we're requesting from the standard root signin page
   ctx.body = {
     data: {
-      providers: AuthenticationHelper.providersForTeam().map(
+      providers: (await AuthenticationHelper.providersForTeam()).map(
         presentProviderConfig
       ),
     },
   };
 });
 
+/** Authentication services that don't require SSO validation. */
+const NON_SSO_SERVICES = ["email", "passkeys"];
+
 router.post("auth.info", auth(), async (ctx: APIContext<T.AuthInfoReq>) => {
-  const { user } = ctx.state.auth;
+  const { user, service } = ctx.state.auth;
   const sessions = getSessionsInCookie(ctx);
   const signedInTeamIds = Object.keys(sessions);
 
@@ -133,9 +137,27 @@ router.post("auth.info", auth(), async (ctx: APIContext<T.AuthInfoReq>) => {
   ]);
 
   // If the user did not _just_ sign in then we need to check if they continue
-  // to have access to the workspace they are signed into.
-  if (user.lastSignedInAt && user.lastSignedInAt < subHours(new Date(), 1)) {
-    await ValidateSSOAccessTask.schedule({ userId: user.id });
+  // to have access to the workspace they are signed into. This only applies
+  // to SSO sessions - email and passkey logins don't have associated
+  // UserAuthentication records that need validation.
+  const isOAuthSession = !service || !NON_SSO_SERVICES.includes(service);
+  if (
+    isOAuthSession &&
+    user.lastSignedInAt &&
+    user.lastSignedInAt < subHours(new Date(), 1)
+  ) {
+    await new ValidateSSOAccessTask()
+      .schedule(
+        {
+          userId: user.id,
+        },
+        {
+          jobId: `validate-sso:${user.id}`,
+        }
+      )
+      .catch(() => {
+        // Ignore errors from duplicate jobId when a validation is already queued
+      });
   }
 
   ctx.body = {
@@ -166,7 +188,7 @@ router.post(
   transaction(),
   async (ctx: APIContext<T.AuthDeleteReq>) => {
     const { auth, transaction } = ctx.state;
-    const { user } = auth;
+    const { user, token } = auth;
 
     await user.rotateJwtSecret({ transaction });
     await Event.createFromContext(ctx, {
@@ -176,6 +198,8 @@ router.post(
         name: user.name,
       },
     });
+
+    void RateLimiter.clearCachedToken(token);
 
     ctx.cookies.set("accessToken", "", {
       sameSite: "lax",

@@ -1,16 +1,26 @@
-import { Token } from "markdown-it";
-import { NodeSpec, NodeType, Node as ProsemirrorNode } from "prosemirror-model";
+import { t } from "i18next";
+import type Token from "markdown-it/lib/token.mjs";
+import type {
+  NodeSpec,
+  NodeType,
+  Node as ProsemirrorNode,
+} from "prosemirror-model";
 import { NodeSelection, TextSelection } from "prosemirror-state";
 import * as React from "react";
-import { Primitive } from "utility-types";
+import type { Primitive } from "utility-types";
 import { sanitizeUrl } from "../../utils/urls";
 import toggleWrap from "../commands/toggleWrap";
 import Caption from "../components/Caption";
 import VideoComponent from "../components/Video";
-import { MarkdownSerializerState } from "../lib/markdown/serializer";
+import type { MarkdownSerializerState } from "../lib/markdown/serializer";
 import attachmentsRule from "../rules/links";
-import { ComponentProps } from "../types";
+import type { ComponentProps } from "../types";
 import Node from "./Node";
+
+const parseDimension = (value: string | null): number | null => {
+  const parsed = parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) ? parsed : null;
+};
 
 export default class Video extends Node {
   get name() {
@@ -51,12 +61,12 @@ export default class Video extends Node {
         {
           priority: 100,
           tag: "video",
-          getAttrs: (dom: HTMLAnchorElement) => ({
+          getAttrs: (dom: HTMLVideoElement) => ({
             id: dom.id,
             title: dom.getAttribute("title"),
             src: dom.getAttribute("src"),
-            width: parseInt(dom.getAttribute("width") ?? "", 10),
-            height: parseInt(dom.getAttribute("height") ?? "", 10),
+            width: parseDimension(dom.getAttribute("width")),
+            height: parseDimension(dom.getAttribute("height")),
           }),
         },
       ],
@@ -77,7 +87,7 @@ export default class Video extends Node {
           String(node.attrs.title),
         ],
       ],
-      toPlainText: (node) => node.attrs.title,
+      leafText: (node) => node.attrs.title,
     };
   }
 
@@ -125,7 +135,7 @@ export default class Video extends Node {
         return;
       }
 
-      // Pressing Backspace in an an empty caption field focuses the video.
+      // Pressing Backspace in an empty caption field focuses the video.
       if (event.key === "Backspace" && event.currentTarget.innerText === "") {
         event.preventDefault();
         event.stopPropagation();
@@ -165,7 +175,7 @@ export default class Video extends Node {
         onBlur={this.handleCaptionBlur(props)}
         onKeyDown={this.handleCaptionKeyDown(props)}
         isSelected={props.isSelected}
-        placeholder={this.options.dictionary.imageCaptionPlaceholder}
+        placeholder={t("Write a caption")}
       >
         {props.node.attrs.title}
       </Caption>
@@ -179,7 +189,9 @@ export default class Video extends Node {
   toMarkdown(state: MarkdownSerializerState, node: ProsemirrorNode) {
     state.ensureNewLine();
     state.write(
-      `[${node.attrs.title} ${node.attrs.width}x${node.attrs.height}](${node.attrs.src})\n\n`
+      `[${node.attrs.title} ${node.attrs.width ?? ""}x${
+        node.attrs.height ?? ""
+      }](${node.attrs.src})\n\n`
     );
     state.ensureNewLine();
   }
@@ -190,8 +202,8 @@ export default class Video extends Node {
       getAttrs: (tok: Token) => ({
         src: tok.attrGet("src"),
         title: tok.attrGet("title"),
-        width: parseInt(tok.attrGet("width") ?? "", 10),
-        height: parseInt(tok.attrGet("height") ?? "", 10),
+        width: parseDimension(tok.attrGet("width")),
+        height: parseDimension(tok.attrGet("height")),
       }),
     };
   }

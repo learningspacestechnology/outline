@@ -1,21 +1,32 @@
-import { CopyIcon, ExpandedIcon } from "outline-icons";
-import { Node as ProseMirrorNode } from "prosemirror-model";
-import { EditorState } from "prosemirror-state";
-import * as React from "react";
+import { CopyIcon, EditIcon, ExpandedIcon, TextWrapIcon } from "outline-icons";
+import type { Node as ProseMirrorNode } from "prosemirror-model";
+import { NodeSelection } from "prosemirror-state";
+import {
+  pluginKey as mermaidPluginKey,
+  type MermaidState,
+} from "@shared/editor/extensions/Mermaid";
 import {
   getFrequentCodeLanguages,
   codeLanguages,
   getLabelForLanguage,
 } from "@shared/editor/lib/code";
-import { MenuItem } from "@shared/editor/types";
-import { Dictionary } from "~/hooks/useDictionary";
+import { isMermaid } from "@shared/editor/lib/isCode";
+import { t } from "i18next";
+import type { MenuItem, SelectionContext } from "@shared/editor/types";
+import { metaDisplay } from "@shared/utils/keyboard";
 
-export default function codeMenuItems(
-  state: EditorState,
-  readOnly: boolean | undefined,
-  dictionary: Dictionary
-): MenuItem[] {
-  const node = state.selection.$from.node();
+/**
+ * Returns menu items for the code block selection toolbar.
+ *
+ * @param ctx - the current selection context.
+ * @returns an array of menu items.
+ */
+export default function codeMenuItems(ctx: SelectionContext): MenuItem[] {
+  const { state, readOnly } = ctx;
+  const node =
+    state.selection instanceof NodeSelection
+      ? state.selection.node
+      : state.selection.$from.node();
 
   const frequentLanguages = getFrequentCodeLanguages();
 
@@ -31,31 +42,56 @@ export default function codeMenuItems(
     )
     .map(([value, item]) => langToMenuItem({ node, value, label: item.label }));
 
-  const languageMenuItems = frequentLangMenuItems.length
-    ? [
-        ...frequentLangMenuItems,
-        { name: "separator" },
-        ...remainingLangMenuItems,
-      ]
-    : remainingLangMenuItems;
+  const getLanguageMenuItems = () =>
+    frequentLangMenuItems.length
+      ? [
+          ...frequentLangMenuItems,
+          { name: "separator" },
+          ...remainingLangMenuItems,
+        ]
+      : remainingLangMenuItems;
+
+  const isEditingMermaid = !!(mermaidPluginKey.getState(state) as MermaidState)
+    ?.editingId;
 
   return [
     {
       name: "copyToClipboard",
       icon: <CopyIcon />,
-      label: readOnly ? dictionary.copy : undefined,
-      tooltip: dictionary.copy,
+      label: readOnly
+        ? getLabelForLanguage(node.attrs.language ?? "none")
+        : undefined,
+      tooltip: t("Copy"),
     },
     {
       name: "separator",
-      visible: !readOnly,
     },
     {
-      visible: !readOnly,
+      name: "edit_mermaid",
+      icon: <EditIcon />,
+      tooltip: t("Edit diagram"),
+      shortcut: `${metaDisplay} Enter`,
+      visible: isMermaid(node) && !isEditingMermaid && !readOnly,
+    },
+    {
+      name: "separator",
+    },
+    {
+      name: "toggleCodeBlockWrap",
+      icon: <TextWrapIcon />,
+      tooltip: t("Wrap text"),
+      active: () => node.attrs.wrap,
+      visible: !readOnly && (!isMermaid(node) || isEditingMermaid),
+    },
+    {
+      name: "separator",
+    },
+    {
       name: "code_block",
-      icon: <ExpandedIcon />,
       label: getLabelForLanguage(node.attrs.language ?? "none"),
-      children: languageMenuItems,
+      icon: <ExpandedIcon />,
+      children: getLanguageMenuItems(),
+      visible: !readOnly,
     },
   ];
 }

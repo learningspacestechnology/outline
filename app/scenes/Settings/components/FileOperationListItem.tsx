@@ -4,16 +4,17 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useTheme } from "styled-components";
+import { errToString } from "@shared/utils/error";
+import Spinner from "@shared/components/Spinner";
 import {
   FileOperationFormat,
   FileOperationState,
   FileOperationType,
 } from "@shared/types";
-import FileOperation from "~/models/FileOperation";
+import type FileOperation from "~/models/FileOperation";
 import { Action } from "~/components/Actions";
 import ConfirmationDialog from "~/components/ConfirmationDialog";
 import ListItem from "~/components/List/Item";
-import Spinner from "~/components/Spinner";
 import Time from "~/components/Time";
 import useCurrentUser from "~/hooks/useCurrentUser";
 import useStores from "~/hooks/useStores";
@@ -57,7 +58,8 @@ const FileOperationListItem = ({ fileOperation }: Props) => {
   const format = formatMapping[fileOperation.format];
   const title =
     fileOperation.type === FileOperationType.Import ||
-    fileOperation.collectionId
+    fileOperation.collectionId ||
+    fileOperation.documentId
       ? fileOperation.name
       : t("All collections");
 
@@ -71,7 +73,7 @@ const FileOperationListItem = ({ fileOperation }: Props) => {
         toast.success(t("Export deleted"));
       }
     } catch (err) {
-      toast.error(err.message);
+      toast.error(errToString(err));
     }
   }, [fileOperation, fileOperations, t]);
 

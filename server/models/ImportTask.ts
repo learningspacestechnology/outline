@@ -1,4 +1,4 @@
-import { InferAttributes, InferCreationAttributes } from "sequelize";
+import type { InferAttributes, InferCreationAttributes } from "sequelize";
 import {
   AllowNull,
   BelongsTo,
@@ -8,8 +8,10 @@ import {
   IsIn,
   Table,
 } from "sequelize-typescript";
-import { type ImportTaskInput, ImportTaskOutput } from "@shared/schema";
-import { ImportableIntegrationService, ImportTaskState } from "@shared/types";
+import type { ImportTaskOutput } from "@shared/schema";
+import { type ImportTaskInput } from "@shared/schema";
+import type { ImportableIntegrationService } from "@shared/types";
+import { ImportTaskPhase, ImportTaskState } from "@shared/types";
 import Import from "./Import";
 import IdModel from "./base/IdModel";
 import Fix from "./decorators/Fix";
@@ -24,7 +26,7 @@ export type ImportTaskAttributes<T extends ImportableIntegrationService> =
   InferAttributes<ImportTask<T>> & NonInferredAttributes<T>;
 
 export type ImportTaskCreationAttributes<
-  T extends ImportableIntegrationService
+  T extends ImportableIntegrationService,
 > = Partial<InferCreationAttributes<ImportTask<T>>> &
   Partial<NonInferredAttributes<T>>;
 
@@ -37,6 +39,10 @@ class ImportTask<T extends ImportableIntegrationService> extends IdModel<
   @IsIn([Object.values(ImportTaskState)])
   @Column(DataType.STRING)
   state: ImportTaskState;
+
+  @IsIn([Object.values(ImportTaskPhase)])
+  @Column(DataType.STRING)
+  phase: ImportTaskPhase;
 
   @Column(DataType.JSONB)
   input: ImportTaskInput<T>;

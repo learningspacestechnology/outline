@@ -1,11 +1,6 @@
-import {
-  InferAttributes,
-  InferCreationAttributes,
-  Op,
-  type SaveOptions,
-  type FindOptions,
-} from "sequelize";
-import { WhereOptions } from "sequelize";
+import type { InferAttributes, InferCreationAttributes } from "sequelize";
+import { Op, type SaveOptions, type FindOptions } from "sequelize";
+import type { WhereOptions } from "sequelize";
 import {
   Column,
   ForeignKey,
@@ -22,15 +17,18 @@ import {
   BeforeDestroy,
   BeforeUpdate,
 } from "sequelize-typescript";
-import { CollectionPermission, DocumentPermission } from "@shared/types";
+import type { DocumentPermission } from "@shared/types";
+import { CollectionPermission } from "@shared/types";
 import { ValidationError } from "@server/errors";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
+import { CacheHelper } from "@server/utils/CacheHelper";
+import { RedisPrefixHelper } from "@server/utils/RedisPrefixHelper";
 import Collection from "./Collection";
 import Document from "./Document";
 import GroupMembership from "./GroupMembership";
 import User from "./User";
 import IdModel from "./base/IdModel";
-import { HookContext } from "./base/Model";
+import type { HookContext } from "./base/Model";
 import Fix from "./decorators/Fix";
 
 /**
@@ -195,7 +193,7 @@ class UserMembership extends IdModel<
       memberships.map((membership) =>
         membership?.sourceId
           ? this.findByPk(membership.sourceId, options)
-          : membership
+          : Promise.resolve(membership)
       )
     );
 
@@ -207,7 +205,7 @@ class UserMembership extends IdModel<
   @AfterCreate
   static async createSourcedMemberships(
     model: UserMembership,
-    options: SaveOptions<UserMembership>
+    options: SaveOptions<UserMembership> & { documentId?: string }
   ) {
     if (model.sourceId || !model.documentId) {
       return;
@@ -224,6 +222,15 @@ class UserMembership extends IdModel<
     await model.insertEvent(context, "add_user", {
       isNew: true,
     });
+  }
+
+  @AfterCreate
+  static async invalidateCollectionIdsAfterCreate(model: UserMembership) {
+    if (model.collectionId) {
+      await CacheHelper.clearData(
+        RedisPrefixHelper.getUserCollectionIdsKey(model.userId)
+      );
+    }
   }
 
   @AfterUpdate
@@ -301,49 +308,67 @@ class UserMembership extends IdModel<
     await model.insertEvent(context, "remove_user");
   }
 
+  @AfterDestroy
+  static async invalidateCollectionIdsAfterDestroy(model: UserMembership) {
+    if (model.collectionId) {
+      await CacheHelper.clearData(
+        RedisPrefixHelper.getUserCollectionIdsKey(model.userId)
+      );
+    }
+  }
+
   /**
    * Recreate all sourced permissions for a given permission.
    */
   static async recreateSourcedMemberships(
     model: UserMembership,
-    options: SaveOptions<UserMembership>
+    options: SaveOptions<UserMembership> & { documentId?: string }
   ) {
     if (!model.documentId) {
       return;
     }
-    const { transaction } = options;
-
-    await this.destroy({
-      where: {
-        userId: model.userId,
-        sourceId: model.id,
-      },
-      transaction,
-    });
+    const { transaction, documentId } = options;
 
     const document = await Document.unscoped()
       .scope("withoutState")
       .findOne({
         attributes: ["id"],
         where: {
-          id: model.documentId,
+          id: documentId ?? model.documentId,
         },
         transaction,
       });
+
     if (!document) {
       return;
     }
 
-    const childDocumentIds = await document.findAllChildDocumentIds(
-      {
-        publishedAt: {
-          [Op.ne]: null,
+    const childDocumentIds = [
+      ...(documentId ? [documentId] : []),
+      ...(await document.findAllChildDocumentIds(
+        {
+          publishedAt: {
+            [Op.ne]: null,
+          },
         },
-      },
-      {
+        {
+          transaction,
+        }
+      )),
+    ];
+
+    if (childDocumentIds.length) {
+      await this.destroy({
+        where: {
+          userId: model.userId,
+          sourceId: model.id,
+          documentId: {
+            [Op.in]: childDocumentIds,
+          },
+        },
         transaction,
-      }
-    );
+      });
+    }
 
     for (const childDocumentId of childDocumentIds) {
       await this.create(
@@ -371,7 +396,7 @@ class UserMembership extends IdModel<
   ) {
     const hookContext = {
       ...ctx,
-      event: { name, data, create: true },
+      event: { name, data, publish: true },
     } as HookContext;
 
     if (this.collectionId) {

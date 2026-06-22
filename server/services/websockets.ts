@@ -1,15 +1,19 @@
-import http, { IncomingMessage } from "http";
-import { Duplex } from "stream";
+import type { IncomingMessage } from "node:http";
+import type http from "node:http";
+import type { Duplex } from "node:stream";
 import cookie from "cookie";
-import Koa from "koa";
+import type Koa from "koa";
 import IO from "socket.io";
 import { createAdapter } from "socket.io-redis";
+import { errToString } from "@shared/utils/error";
+import env from "@server/env";
 import { AuthenticationError } from "@server/errors";
 import Logger from "@server/logging/Logger";
 import Metrics from "@server/logging/Metrics";
 import * as Tracing from "@server/logging/tracer";
 import { traceFunction } from "@server/logging/tracing";
-import { Collection, Group, User } from "@server/models";
+import type { User } from "@server/models";
+import { Collection, Group } from "@server/models";
 import { can } from "@server/policies";
 import Redis from "@server/storage/redis";
 import ShutdownHelper, { ShutdownOrder } from "@server/utils/ShutdownHelper";
@@ -38,7 +42,8 @@ export default function init(
     pingInterval: 15000,
     pingTimeout: 30000,
     cors: {
-      origin: "*",
+      // Included for completeness, though CORS does not apply to websocket transport.
+      origin: env.isCloudHosted ? "*" : env.URL,
       methods: ["GET", "POST"],
     },
   });
@@ -52,7 +57,7 @@ export default function init(
   if (ioHandleUpgrade) {
     server.removeListener(
       "upgrade",
-      ioHandleUpgrade as (...args: any[]) => void
+      ioHandleUpgrade as (...args: unknown[]) => void
     );
   }
 
@@ -60,6 +65,16 @@ export default function init(
     "upgrade",
     function (req: IncomingMessage, socket: Duplex, head: Buffer) {
       if (req.url?.startsWith(path) && ioHandleUpgrade) {
+        // For on-premise deployments, ensure the websocket origin matches the deployed URL.
+        // In cloud-hosted we support any origin for custom domains.
+        if (
+          !env.isCloudHosted &&
+          (!req.headers.origin || !env.URL.startsWith(req.headers.origin))
+        ) {
+          socket.end(`HTTP/1.1 400 Bad Request\r\n`);
+          return;
+        }
+
         ioHandleUpgrade(req, socket, head);
         return;
       }
@@ -119,10 +134,11 @@ export default function init(
       socket.emit("authenticated", true);
       void authenticated(io, socket);
     } catch (err) {
+      const message = errToString(err);
       Logger.debug("websockets", `Authentication error socket ${socket.id}`, {
-        error: err.message,
+        error: message,
       });
-      socket.emit("unauthorized", { message: err.message }, function () {
+      socket.emit("unauthorized", { message }, function () {
         socket.disconnect();
       });
     }
@@ -130,7 +146,7 @@ export default function init(
 
   // Handle events from event queue that should be sent to the clients down ws
   const websockets = new WebsocketsProcessor();
-  websocketQueue
+  websocketQueue()
     .process(
       traceFunction({
         serviceName: "websockets",
@@ -179,9 +195,9 @@ async function authenticated(io: IO.Server, socket: SocketWithAuth) {
     // user is joining a collection channel, because their permissions have
     // changed, granting them access.
     if (event.collectionId) {
-      const collection = await Collection.scope({
-        method: ["withMembership", user.id],
-      }).findByPk(event.collectionId);
+      const collection = await Collection.findByPk(event.collectionId, {
+        userId: user.id,
+      });
 
       if (can(user, "read", collection)) {
         await socket.join(`collection-${event.collectionId}`);
@@ -226,7 +242,7 @@ async function authenticate(socket: SocketWithAuth) {
     throw AuthenticationError("No access token");
   }
 
-  const user = await getUserForJWT(accessToken);
+  const { user } = await getUserForJWT(accessToken);
   socket.client.user = user;
   return user;
 }

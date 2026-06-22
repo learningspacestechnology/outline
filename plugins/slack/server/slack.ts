@@ -1,4 +1,5 @@
-import querystring from "querystring";
+import querystring, { type ParsedUrlQueryInput } from "node:querystring";
+import { errToString } from "@shared/utils/error";
 import { InvalidRequestError } from "@server/errors";
 import fetch from "@server/utils/fetch";
 import { SlackUtils } from "../shared/SlackUtils";
@@ -6,9 +7,19 @@ import env from "./env";
 
 const SLACK_API_URL = "https://slack.com/api";
 
-export async function post(endpoint: string, body: Record<string, any>) {
+/**
+ * Makes a POST request to the Slack API with JSON body.
+ *
+ * @param endpoint - the Slack API endpoint to call.
+ * @param body - the request body containing token and other parameters.
+ * @returns the parsed JSON response from Slack.
+ */
+export async function post(
+  endpoint: string,
+  body: { token: string } & Record<string, unknown>
+) {
   let data;
-  const token = body.token;
+  const { token, ...bodyWithoutToken } = body;
 
   try {
     const response = await fetch(`${SLACK_API_URL}/${endpoint}`, {
@@ -17,11 +28,11 @@ export async function post(endpoint: string, body: Record<string, any>) {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(bodyWithoutToken),
     });
     data = await response.json();
   } catch (err) {
-    throw InvalidRequestError(err.message);
+    throw InvalidRequestError(errToString(err));
   }
 
   if (!data.ok) {
@@ -30,16 +41,43 @@ export async function post(endpoint: string, body: Record<string, any>) {
   return data;
 }
 
-export async function request(endpoint: string, body: Record<string, any>) {
+/**
+ * Makes a POST request to the Slack API with form-urlencoded body.
+ *
+ * @param endpoint - the Slack API endpoint to call.
+ * @param body - the request parameters.
+ * @returns the parsed JSON response from Slack.
+ */
+export async function request(
+  endpoint: string,
+  body: { client_id?: string; client_secret?: string } & ParsedUrlQueryInput
+) {
   let data;
+  const { client_id, client_secret, ...params } = body;
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+
+  // Use HTTP Basic authentication for client credentials as recommended by
+  // Slack documentation and OAuth 2.0 RFC 6749 Section 2.3.1.
+  // This prevents client_secret from being exposed in URLs and logs.
+  if (client_id && client_secret) {
+    const credentials = Buffer.from(`${client_id}:${client_secret}`).toString(
+      "base64"
+    );
+    headers["Authorization"] = `Basic ${credentials}`;
+  }
 
   try {
-    const response = await fetch(
-      `${SLACK_API_URL}/${endpoint}?${querystring.stringify(body)}`
-    );
+    const response = await fetch(`${SLACK_API_URL}/${endpoint}`, {
+      method: "POST",
+      headers,
+      body: querystring.stringify(params),
+    });
     data = await response.json();
   } catch (err) {
-    throw InvalidRequestError(err.message);
+    throw InvalidRequestError(errToString(err));
   }
 
   if (!data.ok) {
@@ -48,6 +86,13 @@ export async function request(endpoint: string, body: Record<string, any>) {
   return data;
 }
 
+/**
+ * Exchanges an OAuth authorization code for an access token.
+ *
+ * @param code - the authorization code received from Slack.
+ * @param redirect_uri - the redirect URI used in the OAuth flow.
+ * @returns the OAuth access response containing the access token.
+ */
 export async function oauthAccess(
   code: string,
   redirect_uri = SlackUtils.callbackUrl()

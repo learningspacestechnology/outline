@@ -1,9 +1,9 @@
 import invariant from "invariant";
 import { action, runInAction, computed } from "mobx";
 import UserMembership from "~/models/UserMembership";
-import { PaginationParams } from "~/types";
+import type { PaginationParams } from "~/types";
 import { client } from "~/utils/ApiClient";
-import RootStore from "./RootStore";
+import type RootStore from "./RootStore";
 import Store, { PAGINATION_SYMBOL, RPCAction } from "./base/Store";
 
 export default class UserMembershipsStore extends Store<UserMembership> {
@@ -19,9 +19,7 @@ export default class UserMembershipsStore extends Store<UserMembership> {
   }
 
   @action
-  fetchPage = async (
-    params?: PaginationParams | undefined
-  ): Promise<UserMembership[]> => {
+  fetchPage = async (params?: PaginationParams): Promise<UserMembership[]> => {
     this.isFetching = true;
 
     try {
@@ -101,4 +99,20 @@ export default class UserMembershipsStore extends Store<UserMembership> {
       return a.index < b.index ? -1 : 1;
     });
   }
+
+  /**
+   * Returns the user membership associated with the document.
+   */
+  getByDocumentId = (documentId: string): UserMembership | undefined => {
+    const membership = this.find({ documentId });
+
+    if (membership) {
+      return membership;
+    }
+
+    const document = this.rootStore.documents.get(documentId);
+    return document?.parentDocumentId
+      ? this.getByDocumentId(document.parentDocumentId)
+      : undefined;
+  };
 }

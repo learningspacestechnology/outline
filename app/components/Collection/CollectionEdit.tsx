@@ -1,8 +1,10 @@
 import { observer } from "mobx-react";
-import * as React from "react";
+import { useCallback } from "react";
 import { toast } from "sonner";
+import { errToString } from "@shared/utils/error";
 import useStores from "~/hooks/useStores";
-import { CollectionForm, FormData } from "./CollectionForm";
+import type { FormData } from "./CollectionForm";
+import { CollectionForm } from "./CollectionForm";
 
 type Props = {
   collectionId: string;
@@ -16,13 +18,13 @@ export const CollectionEdit = observer(function CollectionEdit_({
   const { collections } = useStores();
   const collection = collections.get(collectionId);
 
-  const handleSubmit = React.useCallback(
+  const handleSubmit = useCallback(
     async (data: FormData) => {
       try {
         await collection?.save(data);
         onSubmit?.();
       } catch (error) {
-        toast.error(error.message);
+        toast.error(errToString(error));
       }
     },
     [collection, onSubmit]

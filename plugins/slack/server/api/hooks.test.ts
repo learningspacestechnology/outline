@@ -1,4 +1,4 @@
-import randomstring from "randomstring";
+import { randomString } from "@shared/random";
 import { IntegrationService } from "@shared/types";
 import { IntegrationAuthentication, SearchQuery } from "@server/models";
 import { buildDocument, buildTeam, buildUser } from "@server/test/factories";
@@ -6,11 +6,15 @@ import { getTestServer } from "@server/test/support";
 import env from "../env";
 import * as Slack from "../slack";
 
-jest.mock("../slack", () => ({
-  post: jest.fn(),
-}));
-
 const server = getTestServer();
+
+beforeEach(() => {
+  vi.spyOn(Slack, "post").mockResolvedValue({ ok: true });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("#hooks.unfurl", () => {
   it("should return documents with matching SSO user", async () => {
@@ -24,19 +28,19 @@ describe("#hooks.unfurl", () => {
       service: IntegrationService.Slack,
       userId: user.id,
       teamId: user.teamId,
-      token: randomstring.generate(32),
+      token: randomString(32),
     });
 
     const res = await server.post("/api/hooks.unfurl", {
       body: {
         token: env.SLACK_VERIFICATION_TOKEN,
-        team_id: `T${randomstring.generate(8)}`,
-        api_app_id: `A${randomstring.generate(8)}`,
+        team_id: user.team.authenticationProviders[0].providerId,
+        api_app_id: `A${randomString(8)}`,
         event: {
           type: "link_shared",
-          channel: `C${randomstring.generate(8)}`,
+          channel: `C${randomString(8)}`,
           user: user.authentications[0].providerId,
-          message_ts: randomstring.generate(12),
+          message_ts: randomString(12),
           links: [
             {
               domain: "getoutline.com",

@@ -1,3 +1,4 @@
+import Storage from "@shared/utils/Storage";
 import copy from "copy-to-clipboard";
 import {
   BeakerIcon,
@@ -7,9 +8,8 @@ import {
   TrashIcon,
   UserIcon,
 } from "outline-icons";
-import * as React from "react";
 import { toast } from "sonner";
-import { createAction } from "~/actions";
+import { createAction, createActionWithChildren } from "~/actions";
 import { DeveloperSection } from "~/actions/sections";
 import env from "~/env";
 import { client } from "~/utils/ApiClient";
@@ -17,9 +17,19 @@ import { Feature, FeatureFlags } from "~/utils/FeatureFlags";
 import Logger from "~/utils/Logger";
 import { deleteAllDatabases } from "~/utils/developer";
 import history from "~/utils/history";
-import { homePath } from "~/utils/routeHelpers";
+import { homePath, debugPath } from "~/utils/routeHelpers";
 
-export const copyId = createAction({
+export const goToDebug = createAction({
+  name: "Go to debug screen",
+  icon: <BeakerIcon />,
+  section: DeveloperSection,
+  visible: () => env.ENVIRONMENT === "development",
+  perform: () => {
+    history.push(debugPath());
+  },
+});
+
+export const copyId = createActionWithChildren({
   name: ({ t }) => t("Copy ID"),
   icon: <CopyIcon />,
   keywords: "uuid",
@@ -107,8 +117,8 @@ export const startTyping = createAction({
     }, 250);
 
     window.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
-        intervalId && clearInterval(intervalId);
+      if (event.key === "Escape" && intervalId) {
+        clearInterval(intervalId);
       }
     });
 
@@ -128,6 +138,17 @@ export const clearIndexedDB = createAction({
   },
 });
 
+export const clearStorage = createAction({
+  name: ({ t }) => t("Clear local storage"),
+  icon: <TrashIcon />,
+  keywords: "cache clear localstorage",
+  section: DeveloperSection,
+  perform: ({ t }) => {
+    Storage.clear();
+    toast.success(t("Local storage cleared"));
+  },
+});
+
 export const createTestUsers = createAction({
   name: "Create 10 test users",
   icon: <UserIcon />,
@@ -137,6 +158,18 @@ export const createTestUsers = createAction({
     const count = 10;
     await client.post("/developer.create_test_users", { count });
     toast.message(`${count} test users created`);
+  },
+});
+
+export const createTestNotifications = createAction({
+  name: "Create 10 notifications",
+  icon: <BeakerIcon />,
+  section: DeveloperSection,
+  visible: () => env.ENVIRONMENT === "development",
+  perform: async () => {
+    const count = 10;
+    await client.post("/developer.create_test_notifications", { count });
+    toast.message(`${count} test notifications created`);
   },
 });
 
@@ -165,7 +198,22 @@ export const toggleDebugLogging = createAction({
   },
 });
 
-export const toggleFeatureFlag = createAction({
+export const toggleDebugSafeArea = createAction({
+  name: () => "Toggle menu safe area debugging",
+  icon: <ToolsIcon />,
+  section: DeveloperSection,
+  visible: () => env.ENVIRONMENT === "development",
+  perform: ({ stores }) => {
+    stores.ui.toggleDebugSafeArea();
+    toast.message(
+      stores.ui.debugSafeArea
+        ? "Menu safe area debugging enabled"
+        : "Menu safe area debugging disabled"
+    );
+  },
+});
+
+export const toggleFeatureFlag = createActionWithChildren({
   name: "Toggle feature flag",
   icon: <BeakerIcon />,
   section: DeveloperSection,
@@ -189,19 +237,23 @@ export const toggleFeatureFlag = createAction({
   ),
 });
 
-export const developer = createAction({
+export const developer = createActionWithChildren({
   name: ({ t }) => t("Development"),
   keywords: "debug",
   icon: <ToolsIcon />,
   iconInContextMenu: false,
   section: DeveloperSection,
   children: [
+    goToDebug,
     copyId,
     toggleDebugLogging,
+    toggleDebugSafeArea,
     toggleFeatureFlag,
     createToast,
     createTestUsers,
+    createTestNotifications,
     clearIndexedDB,
+    clearStorage,
     startTyping,
   ],
 });

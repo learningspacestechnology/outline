@@ -1,5 +1,5 @@
-import { Node, ResolvedPos } from "prosemirror-model";
-import { Selection } from "prosemirror-state";
+import type { Node, ResolvedPos } from "prosemirror-model";
+import type { Selection } from "prosemirror-state";
 
 type Predicate = (node: Node) => boolean;
 
@@ -28,7 +28,7 @@ export const findParentNodeClosestToPos = (
   $pos: ResolvedPos,
   predicate: Predicate
 ): ContentNodeWithPos | undefined => {
-  for (let i = $pos.depth; i > 0; i--) {
+  for (let i = $pos.depth; i >= 0; i--) {
     const node = $pos.node(i);
     if (predicate(node)) {
       return {

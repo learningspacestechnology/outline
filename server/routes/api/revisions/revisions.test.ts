@@ -1,3 +1,4 @@
+import { createContext } from "@server/context";
 import { UserMembership, Revision } from "@server/models";
 import {
   buildAdmin,
@@ -16,10 +17,12 @@ describe("#revisions.info", () => {
       userId: user.id,
       teamId: user.teamId,
     });
-    const revision = await Revision.createFromDocument(document);
-    const res = await server.post("/api/revisions.info", {
+    const revision = await Revision.createFromDocument(
+      createContext({ user }),
+      document
+    );
+    const res = await server.post("/api/revisions.info", user, {
       body: {
-        token: user.getJwtToken(),
         id: revision.id,
       },
     });
@@ -30,12 +33,18 @@ describe("#revisions.info", () => {
   });
 
   it("should require authorization", async () => {
-    const document = await buildDocument();
-    const revision = await Revision.createFromDocument(document);
+    const admin = await buildAdmin();
+    const document = await buildDocument({
+      teamId: admin.teamId,
+      userId: admin.id,
+    });
+    const revision = await Revision.createFromDocument(
+      createContext({ user: admin }),
+      document
+    );
     const user = await buildUser();
-    const res = await server.post("/api/revisions.info", {
+    const res = await server.post("/api/revisions.info", user, {
       body: {
-        token: user.getJwtToken(),
         id: revision.id,
       },
     });
@@ -50,11 +59,13 @@ describe("#revisions.update", () => {
       userId: user.id,
       teamId: user.teamId,
     });
-    const revision = await Revision.createFromDocument(document);
+    const revision = await Revision.createFromDocument(
+      createContext({ user }),
+      document
+    );
 
-    const res = await server.post("/api/revisions.update", {
+    const res = await server.post("/api/revisions.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: revision.id,
         name: "new name",
       },
@@ -70,11 +81,13 @@ describe("#revisions.update", () => {
       userId: user.id,
       teamId: user.teamId,
     });
-    const revision = await Revision.createFromDocument(document);
+    const revision = await Revision.createFromDocument(
+      createContext({ user }),
+      document
+    );
 
-    const res = await server.post("/api/revisions.update", {
+    const res = await server.post("/api/revisions.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: revision.id,
         name: null,
       },
@@ -90,11 +103,13 @@ describe("#revisions.update", () => {
       userId: user.id,
       teamId: user.teamId,
     });
-    const revision = await Revision.createFromDocument(document);
+    const revision = await Revision.createFromDocument(
+      createContext({ user }),
+      document
+    );
 
-    const res = await server.post("/api/revisions.update", {
+    const res = await server.post("/api/revisions.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: revision.id,
         name: "",
       },
@@ -106,12 +121,15 @@ describe("#revisions.update", () => {
     const admin = await buildAdmin();
     const document = await buildDocument({
       teamId: admin.teamId,
+      userId: admin.id,
     });
-    const revision = await Revision.createFromDocument(document);
+    const revision = await Revision.createFromDocument(
+      createContext({ user: admin }),
+      document
+    );
 
-    const res = await server.post("/api/revisions.update", {
+    const res = await server.post("/api/revisions.update", admin, {
       body: {
-        token: admin.getJwtToken(),
         id: revision.id,
         name: "new name",
       },
@@ -122,128 +140,20 @@ describe("#revisions.update", () => {
   });
 
   it("should require authorization", async () => {
-    const document = await buildDocument();
-    const revision = await Revision.createFromDocument(document);
+    const admin = await buildAdmin();
+    const document = await buildDocument({
+      teamId: admin.teamId,
+      userId: admin.id,
+    });
+    const revision = await Revision.createFromDocument(
+      createContext({ user: admin }),
+      document
+    );
     const user = await buildUser();
-    const res = await server.post("/api/revisions.update", {
+    const res = await server.post("/api/revisions.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: revision.id,
         name: "new name",
-      },
-    });
-    expect(res.status).toEqual(403);
-  });
-});
-
-describe("#revisions.diff", () => {
-  it("should return the document HTML if no previous revision", async () => {
-    const user = await buildUser();
-    const document = await buildDocument({
-      userId: user.id,
-      teamId: user.teamId,
-    });
-    const revision = await Revision.createFromDocument(document);
-    const res = await server.post("/api/revisions.diff", {
-      body: {
-        token: user.getJwtToken(),
-        id: revision.id,
-      },
-    });
-    const body = await res.json();
-    expect(res.status).toEqual(200);
-
-    // Can't compare entire HTML output due to generated class names
-    expect(body.data).toContain("<html");
-    expect(body.data).toContain("<style");
-    expect(body.data).toContain("<h1");
-    expect(body.data).not.toContain("<ins");
-    expect(body.data).not.toContain("<del");
-    expect(body.data).toContain(document.title);
-  });
-
-  it("should allow returning HTML directly with accept header", async () => {
-    const user = await buildUser();
-    const document = await buildDocument({
-      userId: user.id,
-      teamId: user.teamId,
-    });
-    const revision = await Revision.createFromDocument(document);
-
-    const res = await server.post("/api/revisions.diff", {
-      body: {
-        token: user.getJwtToken(),
-        id: revision.id,
-      },
-      headers: {
-        accept: "text/html",
-      },
-    });
-    const body = await res.text();
-    expect(res.status).toEqual(200);
-
-    // Can't compare entire HTML output due to generated class names
-    expect(body).toContain("<html");
-    expect(body).toContain("<style");
-    expect(body).toContain("<h1");
-    expect(body).not.toContain("<ins");
-    expect(body).not.toContain("<del");
-    expect(body).toContain(document.title);
-  });
-
-  it("should compare to previous revision by default", async () => {
-    const user = await buildUser();
-    const document = await buildDocument({
-      userId: user.id,
-      teamId: user.teamId,
-    });
-    await Revision.createFromDocument(document);
-
-    await document.update({
-      content: {
-        type: "doc",
-        content: [
-          {
-            type: "paragraph",
-            content: [
-              {
-                content: [],
-                type: "text",
-                text: "New text",
-              },
-            ],
-          },
-        ],
-      },
-    });
-    const revision1 = await Revision.createFromDocument(document);
-
-    const res = await server.post("/api/revisions.diff", {
-      body: {
-        token: user.getJwtToken(),
-        id: revision1.id,
-      },
-    });
-    const body = await res.json();
-    expect(res.status).toEqual(200);
-
-    // Can't compare entire HTML output due to generated class names
-    expect(body.data).toContain("<html");
-    expect(body.data).toContain("<style");
-    expect(body.data).toContain("<h1");
-    expect(body.data).toContain("<ins");
-    expect(body.data).toContain("<del");
-    expect(body.data).toContain(document.title);
-  });
-
-  it("should require authorization", async () => {
-    const document = await buildDocument();
-    const revision = await Revision.createFromDocument(document);
-    const user = await buildUser();
-    const res = await server.post("/api/revisions.diff", {
-      body: {
-        token: user.getJwtToken(),
-        id: revision.id,
       },
     });
     expect(res.status).toEqual(403);
@@ -257,10 +167,9 @@ describe("#revisions.list", () => {
       userId: user.id,
       teamId: user.teamId,
     });
-    await Revision.createFromDocument(document);
-    const res = await server.post("/api/revisions.list", {
+    await Revision.createFromDocument(createContext({ user }), document);
+    const res = await server.post("/api/revisions.list", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -282,7 +191,7 @@ describe("#revisions.list", () => {
       collectionId: collection.id,
       teamId: user.teamId,
     });
-    await Revision.createFromDocument(document);
+    await Revision.createFromDocument(createContext({ user }), document);
     collection.permission = null;
     await collection.save();
     await UserMembership.destroy({
@@ -291,9 +200,8 @@ describe("#revisions.list", () => {
         collectionId: collection.id,
       },
     });
-    const res = await server.post("/api/revisions.list", {
+    const res = await server.post("/api/revisions.list", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
       },
     });
@@ -303,10 +211,115 @@ describe("#revisions.list", () => {
   it("should require authorization", async () => {
     const document = await buildDocument();
     const user = await buildUser();
-    const res = await server.post("/api/revisions.list", {
+    const res = await server.post("/api/revisions.list", user, {
       body: {
-        token: user.getJwtToken(),
         documentId: document.id,
+      },
+    });
+    expect(res.status).toEqual(403);
+  });
+});
+
+describe("#revisions.export", () => {
+  it("should return revision as markdown by default", async () => {
+    const user = await buildUser();
+    const document = await buildDocument({
+      userId: user.id,
+      teamId: user.teamId,
+    });
+    const revision = await Revision.createFromDocument(
+      createContext({ user }),
+      document
+    );
+    const res = await server.post("/api/revisions.export", user, {
+      body: {
+        id: revision.id,
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data).toContain(document.title);
+  });
+
+  it("should return revision as markdown with accept header", async () => {
+    const user = await buildUser();
+    const document = await buildDocument({
+      userId: user.id,
+      teamId: user.teamId,
+    });
+    const revision = await Revision.createFromDocument(
+      createContext({ user }),
+      document
+    );
+    const res = await server.post("/api/revisions.export", user, {
+      body: {
+        id: revision.id,
+      },
+      headers: {
+        accept: "text/markdown",
+      },
+    });
+    const body = await res.text();
+    expect(res.status).toEqual(200);
+    expect(body).toContain(document.title);
+  });
+
+  it("should return revision as html with accept header", async () => {
+    const user = await buildUser();
+    const document = await buildDocument({
+      userId: user.id,
+      teamId: user.teamId,
+    });
+    const revision = await Revision.createFromDocument(
+      createContext({ user }),
+      document
+    );
+    const res = await server.post("/api/revisions.export", user, {
+      body: {
+        id: revision.id,
+      },
+      headers: {
+        accept: "text/html",
+      },
+    });
+    const body = await res.text();
+    expect(res.status).toEqual(200);
+    expect(body).toContain("<html");
+    expect(body).toContain(document.title);
+  });
+
+  it("should require authorization without token", async () => {
+    const user = await buildUser();
+    const document = await buildDocument({
+      userId: user.id,
+      teamId: user.teamId,
+    });
+    const revision = await Revision.createFromDocument(
+      createContext({ user }),
+      document
+    );
+    const res = await server.post("/api/revisions.export", {
+      body: {
+        id: revision.id,
+      },
+    });
+    expect(res.status).toEqual(401);
+  });
+
+  it("should require authorization with incorrect token", async () => {
+    const admin = await buildAdmin();
+    const document = await buildDocument({
+      teamId: admin.teamId,
+      userId: admin.id,
+    });
+    const revision = await Revision.createFromDocument(
+      createContext({ user: admin }),
+      document
+    );
+    const user = await buildUser();
+    const res = await server.post("/api/revisions.export", user, {
+      body: {
+        id: revision.id,
       },
     });
     expect(res.status).toEqual(403);

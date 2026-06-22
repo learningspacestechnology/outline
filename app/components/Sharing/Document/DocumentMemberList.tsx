@@ -1,4 +1,4 @@
-import orderBy from "lodash/orderBy";
+import { orderBy } from "es-toolkit/compat";
 import { observer } from "mobx-react";
 import * as React from "react";
 import { useTranslation, Trans } from "react-i18next";
@@ -7,17 +7,20 @@ import { toast } from "sonner";
 import styled, { useTheme } from "styled-components";
 import { s } from "@shared/styles";
 import { DocumentPermission } from "@shared/types";
-import Document from "~/models/Document";
-import UserMembership from "~/models/UserMembership";
+import type Document from "~/models/Document";
+import type UserMembership from "~/models/UserMembership";
 import { GroupAvatar } from "~/components/Avatar";
 import InputMemberPermissionSelect from "~/components/InputMemberPermissionSelect";
 import useCurrentUser from "~/hooks/useCurrentUser";
 import usePolicy from "~/hooks/usePolicy";
 import useStores from "~/hooks/useStores";
-import { EmptySelectValue, Permission } from "~/types";
+import type { Permission } from "~/types";
+import { EmptySelectValue } from "~/types";
 import { homePath } from "~/utils/routeHelpers";
 import { ListItem } from "../components/ListItem";
+import { GroupMembersPopover } from "../components";
 import DocumentMemberListItem from "./DocumentMemberListItem";
+import ButtonLink from "~/components/ButtonLink";
 
 type Props = {
   /** Document to which team members are supposed to be invited */
@@ -28,7 +31,7 @@ type Props = {
   invitedInSession: string[];
 };
 
-function DocumentMembersList({ document, invitedInSession }: Props) {
+function DocumentMemberList({ document, invitedInSession }: Props) {
   const { userMemberships, groupMemberships } = useStores();
 
   const user = useCurrentUser();
@@ -54,7 +57,7 @@ function DocumentMembersList({ document, invitedInSession }: Props) {
             })
           );
         }
-      } catch (err) {
+      } catch (_err) {
         toast.error(t("Could not remove user"));
       }
     },
@@ -62,19 +65,19 @@ function DocumentMembersList({ document, invitedInSession }: Props) {
   );
 
   const handleUpdateUser = React.useCallback(
-    async (user, permission) => {
+    async (userToUpdate, permission) => {
       try {
         await userMemberships.create({
           documentId: document.id,
-          userId: user.id,
+          userId: userToUpdate.id,
           permission,
         });
         toast.success(
           t(`Permissions for {{ userName }} updated`, {
-            userName: user.name,
+            userName: userToUpdate.name,
           })
         );
-      } catch (err) {
+      } catch (_err) {
         toast.error(t("Could not update user"));
       }
     },
@@ -86,10 +89,14 @@ function DocumentMembersList({ document, invitedInSession }: Props) {
   const members = React.useMemo(
     () =>
       orderBy(
-        document.members,
-        (user) =>
-          (invitedInSession.includes(user.id) ? "_" : "") +
-          user.name.toLocaleLowerCase(),
+        Array.from(
+          new Map(
+            document.members.map((memberUser) => [memberUser.id, memberUser])
+          ).values()
+        ),
+        (memberUser) =>
+          (invitedInSession.includes(memberUser.id) ? "_" : "") +
+          memberUser.name.toLocaleLowerCase(),
         "asc"
       ),
     [document.members, invitedInSession]
@@ -121,12 +128,19 @@ function DocumentMembersList({ document, invitedInSession }: Props) {
 
   return (
     <>
-      {groupMemberships
-        .inDocument(document.id)
+      {Array.from(
+        new Map(
+          groupMemberships
+            .inDocument(document.id)
+            .map((membership) => [membership.group.id, membership])
+        ).values()
+      )
         .sort((a, b) =>
           (
             (invitedInSession.includes(a.group.id) ? "_" : "") + a.group.name
-          ).localeCompare(b.group.name)
+          ).localeCompare(
+            (invitedInSession.includes(b.group.id) ? "_" : "") + b.group.name
+          )
         )
         .map((membership) => {
           const MaybeLink = membership?.source ? StyledLink : React.Fragment;
@@ -152,15 +166,18 @@ function DocumentMembersList({ document, invitedInSession }: Props) {
                     </MaybeLink>
                   </Trans>
                 ) : (
-                  t("{{ count }} member", {
-                    count: membership.group.memberCount,
-                  })
+                  <GroupMembersPopover group={membership.group}>
+                    <StyledButtonLink>
+                      {t("{{ count }} member", {
+                        count: membership.group.memberCount,
+                      })}
+                    </StyledButtonLink>
+                  </GroupMembersPopover>
                 )
               }
               actions={
                 <div style={{ marginRight: -8 }}>
                   <InputMemberPermissionSelect
-                    style={{ margin: 0 }}
                     permissions={permissions}
                     onChange={async (
                       permission: DocumentPermission | typeof EmptySelectValue
@@ -180,8 +197,6 @@ function DocumentMembersList({ document, invitedInSession }: Props) {
                     }}
                     disabled={!can.manageUsers}
                     value={membership.permission}
-                    labelHidden
-                    nude
                   />
                 </div>
               }
@@ -208,9 +223,16 @@ function DocumentMembersList({ document, invitedInSession }: Props) {
   );
 }
 
+const StyledButtonLink = styled(ButtonLink)`
+  color: ${s("textTertiary")};
+  &:hover {
+    text-decoration: underline;
+  }
+`;
+
 const StyledLink = styled(Link)`
   color: ${s("textTertiary")};
   text-decoration: underline;
 `;
 
-export default observer(DocumentMembersList);
+export default observer(DocumentMemberList);

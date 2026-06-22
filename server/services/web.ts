@@ -1,13 +1,9 @@
-/* eslint-disable @typescript-eslint/no-var-requires */
-import crypto from "crypto";
-import { Server } from "https";
+/* oxlint-disable @typescript-eslint/no-var-requires */
+import type { Server } from "node:https";
+import type { BaseContext } from "koa";
 import Koa from "koa";
 import compress from "koa-compress";
-import {
-  contentSecurityPolicy,
-  dnsPrefetchControl,
-  referrerPolicy,
-} from "koa-helmet";
+import { dnsPrefetchControl, referrerPolicy } from "koa-helmet";
 import mount from "koa-mount";
 import enforceHttps, {
   httpsResolver,
@@ -17,42 +13,32 @@ import { Second } from "@shared/utils/time";
 import env from "@server/env";
 import Logger from "@server/logging/Logger";
 import Metrics from "@server/logging/Metrics";
+import csp from "@server/middlewares/csp";
+import { attachCSRFToken } from "@server/middlewares/csrf";
 import ShutdownHelper, { ShutdownOrder } from "@server/utils/ShutdownHelper";
 import { initI18n } from "@server/utils/i18n";
 import routes from "../routes";
 import api from "../routes/api";
 import auth from "../routes/auth";
-
-// Construct scripts CSP based on services in use by this installation
-const defaultSrc = ["'self'"];
-const scriptSrc = ["'self'", "www.googletagmanager.com"];
-const styleSrc = ["'self'", "'unsafe-inline'"];
-
-if (env.isCloudHosted) {
-  scriptSrc.push("cdn.zapier.com");
-  styleSrc.push("cdn.zapier.com");
-}
-
-// Allow to load assets from Vite
-if (!env.isProduction) {
-  scriptSrc.push(env.URL.replace(`:${env.PORT}`, ":3001"));
-  scriptSrc.push("localhost:3001");
-}
-
-if (env.GOOGLE_ANALYTICS_ID) {
-  scriptSrc.push("www.google-analytics.com");
-}
-
-if (env.CDN_URL) {
-  scriptSrc.push(env.CDN_URL);
-  styleSrc.push(env.CDN_URL);
-  defaultSrc.push(env.CDN_URL);
-}
+import mcp from "../routes/mcp";
+import oauth from "../routes/oauth";
+import type { UserAgentContext } from "koa-useragent";
+import userAgent from "koa-useragent";
 
 export default function init(app: Koa = new Koa(), server?: Server) {
   void initI18n();
 
   if (env.isProduction) {
+    // Trust the X-Forwarded-* headers set by an upstream proxy, eg
+    // X-Forwarded-For. Defaults to true, but can be disabled with
+    // PROXY_HEADERS_TRUSTED when the app is reachable directly.
+    if (env.PROXY_HEADERS_TRUSTED) {
+      app.proxy = true;
+      if (env.PROXY_IP_HEADER) {
+        app.proxyIpHeader = env.PROXY_IP_HEADER;
+      }
+    }
+
     // Force redirect to HTTPS protocol unless explicitly disabled
     if (env.FORCE_HTTPS) {
       app.use(
@@ -61,21 +47,22 @@ export default function init(app: Koa = new Koa(), server?: Server) {
             if (httpsResolver(ctx)) {
               return true;
             }
-            return xForwardedProtoResolver(ctx);
+            // Only honor X-Forwarded-Proto when proxy headers are trusted
+            return env.PROXY_HEADERS_TRUSTED
+              ? xForwardedProtoResolver(ctx)
+              : false;
           },
         })
       );
     } else {
       Logger.warn("Enforced https was disabled with FORCE_HTTPS env variable");
     }
-
-    // trust header fields set by our proxy. eg X-Forwarded-For
-    app.proxy = true;
   }
 
+  // Make `ctx.userAgent` available
+  app.use<BaseContext, UserAgentContext>(userAgent);
+
   app.use(compress());
-  app.use(mount("/auth", auth));
-  app.use(mount("/api", api));
 
   // Monitor server connections
   if (server) {
@@ -93,31 +80,14 @@ export default function init(app: Koa = new Koa(), server?: Server) {
     Metrics.gaugePerInstance("connections.count", 0);
   });
 
-  // Sets common security headers by default, such as no-sniff, hsts, hide powered
-  // by etc, these are applied after auth and api so they are only returned on
-  // standard non-XHR accessed routes
-  app.use((ctx, next) => {
-    ctx.state.cspNonce = crypto.randomBytes(16).toString("hex");
+  app.use(mount("/api", api));
+  app.use(mount("/mcp", mcp));
 
-    return contentSecurityPolicy({
-      directives: {
-        defaultSrc,
-        styleSrc,
-        scriptSrc: [
-          ...scriptSrc,
-          env.DEVELOPMENT_UNSAFE_INLINE_CSP
-            ? "'unsafe-inline'"
-            : `'nonce-${ctx.state.cspNonce}'`,
-        ],
-        mediaSrc: ["*", "data:", "blob:"],
-        imgSrc: ["*", "data:", "blob:"],
-        frameSrc: ["*", "data:"],
-        // Do not use connect-src: because self + websockets does not work in
-        // Safari, ref: https://bugs.webkit.org/show_bug.cgi?id=201591
-        connectSrc: ["*"],
-      },
-    })(ctx, next);
-  });
+  // Generate and attach a CSRF token to the session on non-API requests
+  app.use(attachCSRFToken());
+
+  // Apply CSP middleware after API as these responses are rendered in the browser
+  app.use(csp());
 
   // Allow DNS prefetching for performance, we do not care about leaking requests
   // to our own CDN's
@@ -132,6 +102,8 @@ export default function init(app: Koa = new Koa(), server?: Server) {
     })
   );
 
+  app.use(mount("/auth", auth));
+  app.use(mount("/oauth", oauth));
   app.use(mount(routes));
 
   return app;

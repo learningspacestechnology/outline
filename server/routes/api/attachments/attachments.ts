@@ -1,5 +1,6 @@
 import Router from "koa-router";
-import { v4 as uuidv4 } from "uuid";
+import type { WhereOptions } from "sequelize";
+import { randomUUID } from "node:crypto";
 import { AttachmentPreset } from "@shared/types";
 import { bytesToHumanReadable, getFileNameFromUrl } from "@shared/utils/files";
 import { AttachmentValidation } from "@shared/validations";
@@ -16,12 +17,13 @@ import validate from "@server/middlewares/validate";
 import { Attachment, Document } from "@server/models";
 import AttachmentHelper from "@server/models/helpers/AttachmentHelper";
 import { authorize } from "@server/policies";
-import { presentAttachment } from "@server/presenters";
+import { presentAttachment, presentPolicies } from "@server/presenters";
 import UploadAttachmentFromUrlTask from "@server/queues/tasks/UploadAttachmentFromUrlTask";
+import pagination from "@server/routes/api/middlewares/pagination";
 import { sequelize } from "@server/storage/database";
 import FileStorage from "@server/storage/files";
 import BaseStorage from "@server/storage/files/BaseStorage";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
 import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import { assertIn } from "@server/validation";
 import * as T from "./schema";
@@ -29,26 +31,80 @@ import * as T from "./schema";
 const router = new Router();
 
 router.post(
+  "attachments.list",
+  auth(),
+  pagination(),
+  validate(T.AttachmentsListSchema),
+  async (ctx: APIContext<T.AttachmentsListReq>) => {
+    const { documentId, userId } = ctx.input.body;
+    const { user } = ctx.state.auth;
+
+    const where: WhereOptions<Attachment> = {
+      teamId: user.teamId,
+    };
+
+    // If a specific user is passed then add to filters
+    if (userId && user.isAdmin) {
+      where.userId = userId;
+    } else {
+      where.userId = user.id;
+    }
+
+    // If a specific document is passed then add to filters
+    if (documentId) {
+      const document = await Document.findByPk(documentId, {
+        userId: user.id,
+      });
+      authorize(user, "read", document);
+      where.documentId = documentId;
+    }
+
+    const [attachments, total] = await Promise.all([
+      Attachment.findAll({
+        where,
+        order: [["createdAt", "DESC"]],
+        offset: ctx.state.pagination.offset,
+        limit: ctx.state.pagination.limit,
+      }),
+      Attachment.count({
+        where,
+      }),
+    ]);
+
+    ctx.body = {
+      pagination: { ...ctx.state.pagination, total },
+      data: attachments.map(presentAttachment),
+      policies: presentPolicies(user, attachments),
+    };
+  }
+);
+
+router.post(
   "attachments.create",
-  rateLimiter(RateLimiterStrategy.TenPerMinute),
+  rateLimiter(RateLimiterStrategy.TwentyFivePerMinute),
   auth(),
   validate(T.AttachmentsCreateSchema),
   transaction(),
   async (ctx: APIContext<T.AttachmentCreateReq>) => {
-    const { name, documentId, contentType, size, preset } = ctx.input.body;
+    const { id, name, documentId, contentType, size, preset } = ctx.input.body;
     const { auth, transaction } = ctx.state;
     const { user } = auth;
 
     // All user types can upload an avatar so no additional authorization is needed.
     if (preset === AttachmentPreset.Avatar) {
       assertIn(contentType, AttachmentValidation.avatarContentTypes);
-    } else if (preset === AttachmentPreset.DocumentAttachment && documentId) {
-      const document = await Document.findByPk(documentId, {
-        userId: user.id,
-        transaction,
-      });
-      authorize(user, "update", document);
     } else {
+      if (preset === AttachmentPreset.DocumentAttachment && documentId) {
+        const document = await Document.findByPk(documentId, {
+          userId: user.id,
+          transaction,
+        });
+        authorize(user, "update", document);
+      }
+      if (preset === AttachmentPreset.Emoji) {
+        assertIn(contentType, AttachmentValidation.emojiContentTypes);
+      }
+
       authorize(user, "createAttachment", user.team);
     }
 
@@ -62,10 +118,9 @@ router.post(
       );
     }
 
-    const modelId = uuidv4();
+    const modelId = id ?? randomUUID();
     const acl = AttachmentHelper.presetToAcl(preset);
     const key = AttachmentHelper.getKey({
-      acl,
       id: modelId,
       name,
       userId: user.id,
@@ -84,6 +139,7 @@ router.post(
     });
 
     const presignedPost = await FileStorage.getPresignedPost(
+      ctx,
       key,
       acl,
       maxUploadSize,
@@ -100,12 +156,7 @@ router.post(
         },
         attachment: {
           ...presentAttachment(attachment),
-          // always use the redirect url for document attachments, as the serializer
-          // depends on it to detect attachment vs link
-          url:
-            preset === AttachmentPreset.DocumentAttachment
-              ? attachment.redirectUrl
-              : attachment.url,
+          url: attachment.redirectUrl,
         },
       },
     };
@@ -118,7 +169,7 @@ router.post(
   auth(),
   validate(T.AttachmentsCreateFromUrlSchema),
   async (ctx: APIContext<T.AttachmentCreateFromUrlReq>) => {
-    const { url, documentId, preset } = ctx.input.body;
+    const { id, url, documentId, preset } = ctx.input.body;
     const { user, type } = ctx.state.auth;
 
     if (preset !== AttachmentPreset.DocumentAttachment || !documentId) {
@@ -133,10 +184,9 @@ router.post(
     authorize(user, "update", document);
 
     const name = getFileNameFromUrl(url) ?? "file";
-    const modelId = uuidv4();
+    const modelId = id ?? randomUUID();
     const acl = AttachmentHelper.presetToAcl(preset);
     const key = AttachmentHelper.getKey({
-      acl,
       id: modelId,
       name,
       userId: user.id,
@@ -166,7 +216,7 @@ router.post(
       )
     );
 
-    const job = await UploadAttachmentFromUrlTask.schedule({
+    const job = await new UploadAttachmentFromUrlTask().schedule({
       attachmentId: attachment.id,
       url,
     });
@@ -221,12 +271,17 @@ const handleAttachmentsRedirect = async (
 ) => {
   const id = (ctx.input.body.id ?? ctx.input.query.id) as string;
 
-  const { user } = ctx.state.auth;
+  const user = ctx.state.auth?.user;
   const attachment = await Attachment.findByPk(id, {
     rejectOnEmpty: true,
   });
 
-  if (attachment.isPrivate && attachment.teamId !== user.teamId) {
+  // Private attachments are accessible to any member of the workspace they
+  // belong to. This is intentional and not a permission bypass – attachments
+  // are owned by the workspace (team), not by individual documents. Checking
+  // document-level permissions here would be insufficient anyway as attachments
+  // can exist independently of documents.
+  if (attachment.isPrivate && attachment.teamId !== user?.teamId) {
     throw AuthorizationError();
   }
 
@@ -239,27 +294,27 @@ const handleAttachmentsRedirect = async (
     }
   );
 
-  if (attachment.isPrivate) {
+  if (attachment.isStoredInPublicBucket) {
+    ctx.set("Cache-Control", `max-age=604800, immutable`);
+    ctx.redirect(attachment.canonicalUrl);
+  } else {
     ctx.set(
       "Cache-Control",
       `max-age=${BaseStorage.defaultSignedUrlExpires}, immutable`
     );
     ctx.redirect(await attachment.signedUrl);
-  } else {
-    ctx.set("Cache-Control", `max-age=604800, immutable`);
-    ctx.redirect(attachment.canonicalUrl);
   }
 };
 
 router.get(
   "attachments.redirect",
-  auth(),
+  auth({ optional: true }),
   validate(T.AttachmentsRedirectSchema),
   handleAttachmentsRedirect
 );
 router.post(
   "attachments.redirect",
-  auth(),
+  auth({ optional: true }),
   validate(T.AttachmentsRedirectSchema),
   handleAttachmentsRedirect
 );

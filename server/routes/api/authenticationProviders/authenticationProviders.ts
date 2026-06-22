@@ -1,16 +1,18 @@
 import Router from "koa-router";
 import { UserRole } from "@shared/types";
+import env from "@server/env";
 import auth from "@server/middlewares/authentication";
 import { transaction } from "@server/middlewares/transaction";
 import validate from "@server/middlewares/validate";
-import { AuthenticationProvider, Event } from "@server/models";
+import { AuthenticationProvider } from "@server/models";
 import AuthenticationHelper from "@server/models/helpers/AuthenticationHelper";
 import { authorize } from "@server/policies";
+import { PluginManager } from "@server/utils/PluginManager";
 import {
   presentAuthenticationProvider,
   presentPolicies,
 } from "@server/presenters";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
 import * as T from "./schema";
 
 const router = new Router();
@@ -40,7 +42,7 @@ router.post(
   transaction(),
   async (ctx: APIContext<T.AuthenticationProvidersUpdateReq>) => {
     const { transaction } = ctx.state;
-    const { id, isEnabled } = ctx.input.body;
+    const { id, isEnabled, settings } = ctx.input.body;
     const { user } = ctx.state.auth;
 
     const authenticationProvider = await AuthenticationProvider.findByPk(id, {
@@ -49,25 +51,64 @@ router.post(
     });
 
     authorize(user, "update", authenticationProvider);
-    const enabled = !!isEnabled;
 
-    if (enabled) {
-      await authenticationProvider.enable({ transaction });
-    } else {
-      await authenticationProvider.disable({ transaction });
+    if (isEnabled !== undefined) {
+      const enabled = !!isEnabled;
+
+      if (enabled) {
+        await authenticationProvider.enable(ctx);
+      } else {
+        await authenticationProvider.disable(ctx);
+      }
     }
 
-    await Event.createFromContext(ctx, {
-      name: "authenticationProviders.update",
-      data: {
-        enabled,
-      },
-      modelId: id,
-    });
+    if (settings !== undefined) {
+      await authenticationProvider.updateWithCtx(ctx, {
+        settings: {
+          ...(authenticationProvider.settings ?? {}),
+          ...settings,
+        },
+      });
+    }
 
     ctx.body = {
       data: presentAuthenticationProvider(authenticationProvider),
       policies: presentPolicies(user, [authenticationProvider]),
+    };
+  }
+);
+
+router.post(
+  "authenticationProviders.delete",
+  auth({ role: UserRole.Admin }),
+  validate(T.AuthenticationProvidersDeleteSchema),
+  transaction(),
+  async (ctx: APIContext<T.AuthenticationProvidersDeleteReq>) => {
+    const { transaction } = ctx.state;
+    const { id } = ctx.input.body;
+    const { user } = ctx.state.auth;
+
+    const authenticationProvider = await AuthenticationProvider.findByPk(id, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+
+    authorize(user, "delete", authenticationProvider);
+
+    if (authenticationProvider.enabled) {
+      await authenticationProvider.disable(ctx);
+    }
+
+    // On self-hosted, providers are typically registered via env vars and
+    // would re-appear on the login screen if the row was destroyed, so we
+    // keep the row with enabled=false. On cloud, destroy the row so the
+    // admin can reconnect with a different workspace.
+    if (env.isCloudHosted) {
+      await authenticationProvider.destroy({ transaction });
+    }
+
+    ctx.body = {
+      success: true,
     };
   }
 );
@@ -84,10 +125,13 @@ router.post(
     )) as AuthenticationProvider[];
 
     const data = AuthenticationHelper.providers
-      .filter((p) => p.value.id !== "email")
+      .filter((p) => p.value.id !== "email" && p.value.id !== "passkeys")
       .map((p) => {
         const row = teamAuthenticationProviders.find(
           (t) => t.name === p.value.id
+        );
+        const groupSyncProvider = PluginManager.getGroupSyncProvider(
+          p.value.id
         );
 
         return {
@@ -96,10 +140,12 @@ router.post(
           displayName: p.name,
           isEnabled: false,
           isConnected: false,
+          groupSyncSupported: !!groupSyncProvider,
+          groupSyncUsesClaim: groupSyncProvider?.useGroupClaim ?? false,
           ...(row ? presentAuthenticationProvider(row) : {}),
         };
       })
-      .sort((a) => (a.isEnabled ? -1 : 1));
+      .sort((a, b) => (a.isEnabled === b.isEnabled ? 0 : a.isEnabled ? -1 : 1));
 
     ctx.body = {
       data,

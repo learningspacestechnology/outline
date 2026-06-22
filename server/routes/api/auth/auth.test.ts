@@ -1,11 +1,11 @@
 import { faker } from "@faker-js/faker";
-import { v4 as uuidv4 } from "uuid";
-import { buildUser, buildTeam } from "@server/test/factories";
+import { randomUUID } from "node:crypto";
+import { buildUser, buildTeam, buildUserPasskey } from "@server/test/factories";
 import { getTestServer, setSelfHosted } from "@server/test/support";
 
-const mockTeamInSessionId = uuidv4();
+const mockTeamInSessionId = randomUUID();
 
-jest.mock("@server/utils/authentication", () => ({
+vi.mock("@server/utils/authentication", () => ({
   getSessionsInCookie() {
     return { [mockTeamInSessionId]: {} };
   },
@@ -27,15 +27,13 @@ describe("#auth.info", () => {
       teamId: team2.id,
       email: user.email,
     });
-    const res = await server.post("/api/auth.info", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/auth.info", user);
     const body = await res.json();
     expect(res.status).toEqual(200);
 
-    const availableTeamIds = body.data.availableTeams.map((t: any) => t.id);
+    const availableTeamIds = body.data.availableTeams.map(
+      (t: { id: string }) => t.id
+    );
 
     expect(availableTeamIds.length).toEqual(3);
     expect(availableTeamIds).toContain(team.id);
@@ -50,11 +48,7 @@ describe("#auth.info", () => {
     const team = await buildTeam();
     const user = await buildUser({ teamId: team.id });
     await team.destroy();
-    const res = await server.post("/api/auth.info", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/auth.info", user);
     expect(res.status).toEqual(401);
   });
 
@@ -67,18 +61,10 @@ describe("#auth.info", () => {
 describe("#auth.delete", () => {
   it("should make the access token unusable", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/auth.delete", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/auth.delete", user);
     expect(res.status).toEqual(200);
 
-    const res2 = await server.post("/api/auth.info", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res2 = await server.post("/api/auth.info", user);
     expect(res2.status).toEqual(401);
   });
 
@@ -107,7 +93,7 @@ describe("#auth.config", () => {
       authenticationProviders: [
         {
           name: "slack",
-          providerId: uuidv4(),
+          providerId: randomUUID(),
         },
       ],
     });
@@ -130,7 +116,7 @@ describe("#auth.config", () => {
       authenticationProviders: [
         {
           name: "slack",
-          providerId: uuidv4(),
+          providerId: randomUUID(),
         },
       ],
     });
@@ -153,7 +139,7 @@ describe("#auth.config", () => {
       authenticationProviders: [
         {
           name: "slack",
-          providerId: uuidv4(),
+          providerId: randomUUID(),
         },
       ],
     });
@@ -177,7 +163,7 @@ describe("#auth.config", () => {
       authenticationProviders: [
         {
           name: "slack",
-          providerId: uuidv4(),
+          providerId: randomUUID(),
           enabled: false,
         },
       ],
@@ -192,6 +178,57 @@ describe("#auth.config", () => {
     expect(body.data.providers.length).toBe(0);
   });
 
+  it("should not return passkeys provider when passkeysEnabled but no passkeys exist", async () => {
+    const subdomain = faker.internet.domainWord();
+    await buildTeam({
+      guestSignin: false,
+      passkeysEnabled: true,
+      subdomain,
+      authenticationProviders: [
+        {
+          name: "slack",
+          providerId: randomUUID(),
+        },
+      ],
+    });
+    const res = await server.post("/api/auth.config", {
+      headers: {
+        host: `${subdomain}.outline.dev`,
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.providers.length).toBe(1);
+    expect(body.data.providers[0].name).toBe("Slack");
+  });
+
+  it("should return passkeys provider when passkeysEnabled and passkeys exist", async () => {
+    const subdomain = faker.internet.domainWord();
+    const team = await buildTeam({
+      guestSignin: false,
+      passkeysEnabled: true,
+      subdomain,
+      authenticationProviders: [
+        {
+          name: "slack",
+          providerId: randomUUID(),
+        },
+      ],
+    });
+    const user = await buildUser({ teamId: team.id });
+    await buildUserPasskey({ userId: user.id });
+    const res = await server.post("/api/auth.config", {
+      headers: {
+        host: `${subdomain}.outline.dev`,
+      },
+    });
+    const body = await res.json();
+    expect(res.status).toEqual(200);
+    expect(body.data.providers.length).toBe(2);
+    expect(body.data.providers[0].name).toBe("Slack");
+    expect(body.data.providers[1].name).toBe("Passkeys");
+  });
+
   describe.skip("self hosted", () => {
     beforeEach(setSelfHosted);
 
@@ -201,7 +238,7 @@ describe("#auth.config", () => {
         authenticationProviders: [
           {
             name: "slack",
-            providerId: uuidv4(),
+            providerId: randomUUID(),
           },
         ],
       });
@@ -220,7 +257,7 @@ describe("#auth.config", () => {
         authenticationProviders: [
           {
             name: "slack",
-            providerId: uuidv4(),
+            providerId: randomUUID(),
           },
         ],
       });

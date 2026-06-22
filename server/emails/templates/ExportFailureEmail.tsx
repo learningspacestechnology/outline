@@ -1,7 +1,8 @@
 import * as React from "react";
 import { NotificationEventType } from "@shared/types";
 import NotificationSettingsHelper from "@server/models/helpers/NotificationSettingsHelper";
-import BaseEmail, { EmailMessageCategory, EmailProps } from "./BaseEmail";
+import type { EmailProps } from "./BaseEmail";
+import BaseEmail, { EmailMessageCategory } from "./BaseEmail";
 import Body from "./components/Body";
 import Button from "./components/Button";
 import EmailTemplate from "./components/EmailLayout";
@@ -47,19 +48,18 @@ export default class ExportFailureEmail extends BaseEmail<
   }
 
   protected subject() {
-    return "Your requested export";
+    return this.t("Your requested export");
   }
 
   protected preview() {
-    return "Sorry, your requested data export has failed";
+    return this.t("Sorry, your requested data export has failed");
   }
 
   protected renderAsText() {
     return `
-Your Data Export
+${this.t("Your Data Export")}
 
-Sorry, your requested data export has failed, please visit the admin
-section to try again – if the problem persists please contact support.
+${this.t("Sorry, your requested data export has failed, please visit the admin section to try again \u2013 if the problem persists please contact support.")}
 `;
   }
 
@@ -70,20 +70,28 @@ section to try again – if the problem persists please contact support.
       <EmailTemplate previewText={this.preview()}>
         <Header />
         <Body>
-          <Heading>Your Data Export</Heading>
+          <Heading>{this.t("Your Data Export")}</Heading>
           <p>
-            Sorry, your requested data export has failed, please visit the{" "}
+            {this.t(
+              "Sorry, your requested data export has failed, please visit the"
+            )}{" "}
             <a href={exportLink} rel="noreferrer" target="_blank">
-              admin section
+              {this.t("admin section")}
             </a>
-            . to try again – if the problem persists please contact support.
+            .{" "}
+            {this.t(
+              "to try again \u2013 if the problem persists please contact support."
+            )}
           </p>
           <EmptySpace height={10} />
           <p>
-            <Button href={exportLink}>Go to export</Button>
+            <Button href={exportLink}>{this.t("Go to export")}</Button>
           </p>
         </Body>
-        <Footer unsubscribeUrl={unsubscribeUrl} />
+        <Footer
+          unsubscribeUrl={unsubscribeUrl}
+          unsubscribeText={this.t("Unsubscribe from these emails")}
+        />
       </EmailTemplate>
     );
   }

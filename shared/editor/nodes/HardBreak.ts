@@ -1,7 +1,7 @@
-import { NodeSpec, NodeType } from "prosemirror-model";
-import { Command } from "prosemirror-state";
+import type { NodeSpec, NodeType } from "prosemirror-model";
+import type { Command } from "prosemirror-state";
 import { isInTable } from "prosemirror-tables";
-import { MarkdownSerializerState } from "../lib/markdown/serializer";
+import type { MarkdownSerializerState } from "../lib/markdown/serializer";
 import { isInCode } from "../queries/isInCode";
 import { isNodeActive } from "../queries/isNodeActive";
 import breakRule from "../rules/breaks";
@@ -19,7 +19,7 @@ export default class HardBreak extends Node {
       selectable: false,
       parseDOM: [{ tag: "br" }],
       toDOM: () => ["br"],
-      toPlainText: () => "\n",
+      leafText: () => "\n",
     };
   }
 
@@ -55,7 +55,11 @@ export default class HardBreak extends Node {
   }
 
   toMarkdown(state: MarkdownSerializerState) {
-    state.write(state.options.softBreak ? "\n" : "\\n");
+    // Two trailing spaces is a CommonMark hard break that survives a
+    // copy/export round-trip, unlike a bare newline.
+    state.write(
+      state.inTable ? "<br>" : state.options.commonMark ? "  \n" : "\\n"
+    );
   }
 
   parseMarkdown() {

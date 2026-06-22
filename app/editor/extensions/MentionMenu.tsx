@@ -1,13 +1,12 @@
 import { action } from "mobx";
-import * as React from "react";
-import { WidgetProps } from "@shared/editor/lib/Extension";
+import type { WidgetProps } from "@shared/editor/lib/Extension";
 import Suggestion from "~/editor/extensions/Suggestion";
 import MentionMenu from "../components/MentionMenu";
 
 export default class MentionMenuExtension extends Suggestion {
   get defaultOptions() {
     return {
-      trigger: "@",
+      trigger: ["@", "\uff20"],
       allowSpaces: true,
       requireSearchTerm: false,
       enabledInCode: false,

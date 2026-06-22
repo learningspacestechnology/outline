@@ -1,6 +1,7 @@
 import * as React from "react";
 import styled from "styled-components";
-import Tooltip, { Props } from "~/components/Tooltip";
+import type { Props } from "~/components/Tooltip";
+import Tooltip from "~/components/Tooltip";
 
 const WrappedTooltip: React.FC<Props> = ({
   children,
@@ -8,10 +9,10 @@ const WrappedTooltip: React.FC<Props> = ({
   ...rest
 }: Props) => (
   <Tooltip
-    offset={[0, 16]}
-    delay={150}
+    sideOffset={16}
+    delayDuration={150}
     content={content}
-    placement="top"
+    side="top"
     shortcutOnNewline
     {...rest}
   >

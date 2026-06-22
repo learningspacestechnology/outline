@@ -1,12 +1,12 @@
-import compact from "lodash/compact";
-import orderBy from "lodash/orderBy";
-import { Op, WhereOptions } from "sequelize";
+import { compact, orderBy } from "es-toolkit/compat";
+import type { WhereOptions } from "sequelize";
+import { Op } from "sequelize";
 import { CollectionPermission, DocumentPermission } from "@shared/types";
+import type { User } from "@server/models";
 import {
   Document,
   Group,
   GroupMembership,
-  User,
   UserMembership,
 } from "@server/models";
 import { authorize } from "@server/policies";
@@ -39,7 +39,7 @@ export const canUserAccessDocument = async (user: User, documentId: string) => {
     });
     authorize(user, "read", document);
     return true;
-  } catch (err) {
+  } catch (_err) {
     return false;
   }
 };
@@ -99,10 +99,7 @@ export const getDocumentPermission = async ({
   documentId: string;
   skipMembershipId?: string;
 }): Promise<DocumentPermission | undefined> => {
-  const document = await Document.scope({
-    method: ["withCollectionPermissions", userId],
-  }).findOne({ where: { id: documentId } });
-
+  const document = await Document.findByPk(documentId, { userId });
   const permissions: DocumentPermission[] = [];
 
   const collection = document?.collection;

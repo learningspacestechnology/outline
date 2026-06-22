@@ -1,4 +1,4 @@
-import { DefaultTheme } from "styled-components";
+import type { DefaultTheme } from "styled-components";
 import { isTouchDevice } from "../utils/browser";
 
 export { default as depths } from "./depths";
@@ -30,7 +30,7 @@ export const ellipsis = () => `
  */
 export const s =
   (key: keyof DefaultTheme) => (props: { theme: DefaultTheme }) =>
-    String(props.theme[key]);
+    props.theme[key] as string;
 
 /**
  * Mixin to hide scrollbars.

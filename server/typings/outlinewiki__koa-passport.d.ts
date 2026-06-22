@@ -11,8 +11,8 @@ declare module "@outlinewiki/koa-passport" {
   // Definitions: https://github.com/DefinitelyTyped/DefinitelyTyped
   // TypeScript Version: 2.3
 
-  import { IncomingMessage } from "http";
-  // eslint-disable-next-line
+  import { IncomingMessage } from "node:http";
+  // oxlint-disable-next-line
   import Express from "express";
   import { Request } from "koa";
   import { IMiddleware } from "koa-router";
@@ -43,7 +43,7 @@ declare module "@outlinewiki/koa-passport" {
       InitializeRet = IMiddleware,
       AuthenticateRet = any,
       AuthorizeRet = AuthenticateRet,
-      AuthorizeOptions = AuthenticateOptions
+      AuthorizeOptions = AuthenticateOptions,
     > {
       use(strategy: Strategy): this;
       use(name: string, strategy: Strategy): this;
@@ -178,7 +178,7 @@ declare module "@outlinewiki/koa-passport" {
     interface Framework<
       InitializeRet = any,
       AuthenticateRet = any,
-      AuthorizeRet = AuthenticateRet
+      AuthorizeRet = AuthenticateRet,
     > {
       initialize(
         passport: Authenticator<InitializeRet, AuthenticateRet, AuthorizeRet>,

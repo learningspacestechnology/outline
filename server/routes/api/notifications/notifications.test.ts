@@ -1,7 +1,8 @@
 import queryString from "query-string";
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID } from "node:crypto";
 import { randomElement } from "@shared/random";
 import { NotificationEventType } from "@shared/types";
+import NotificationSettingsHelper from "@server/models/helpers/NotificationSettingsHelper";
 import {
   buildCollection,
   buildDocument,
@@ -10,6 +11,12 @@ import {
   buildUser,
 } from "@server/test/factories";
 import { getTestServer } from "@server/test/support";
+
+type NotificationItem = {
+  actor: { id: string };
+  userId: string;
+  event: NotificationEventType;
+};
 
 const server = getTestServer();
 
@@ -57,24 +64,22 @@ describe("#notifications.list", () => {
       }),
     ]);
 
-    const res = await server.post("/api/notifications.list", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/notifications.list", user);
     const body = await res.json();
 
     expect(res.status).toBe(200);
     expect(body.data.notifications.length).toBe(3);
     expect(body.pagination.total).toBe(3);
     expect(body.data.unseen).toBe(2);
-    expect((randomElement(body.data.notifications) as any).actor.id).toBe(
-      actor.id
+    expect(
+      randomElement<NotificationItem>(body.data.notifications).actor.id
+    ).toBe(actor.id);
+    expect(
+      randomElement<NotificationItem>(body.data.notifications).userId
+    ).toBe(user.id);
+    const events = body.data.notifications.map(
+      (n: NotificationItem) => n.event
     );
-    expect((randomElement(body.data.notifications) as any).userId).toBe(
-      user.id
-    );
-    const events = body.data.notifications.map((n: any) => n.event);
     expect(events).toContain(NotificationEventType.UpdateDocument);
     expect(events).toContain(NotificationEventType.CreateComment);
     expect(events).toContain(NotificationEventType.MentionedInComment);
@@ -121,9 +126,8 @@ describe("#notifications.list", () => {
       }),
     ]);
 
-    const res = await server.post("/api/notifications.list", {
+    const res = await server.post("/api/notifications.list", user, {
       body: {
-        token: user.getJwtToken(),
         eventType: NotificationEventType.MentionedInComment,
       },
     });
@@ -133,13 +137,15 @@ describe("#notifications.list", () => {
     expect(body.data.notifications.length).toBe(1);
     expect(body.pagination.total).toBe(1);
     expect(body.data.unseen).toBe(1);
-    expect((randomElement(body.data.notifications) as any).actor.id).toBe(
-      actor.id
+    expect(
+      randomElement<NotificationItem>(body.data.notifications).actor.id
+    ).toBe(actor.id);
+    expect(
+      randomElement<NotificationItem>(body.data.notifications).userId
+    ).toBe(user.id);
+    const events = body.data.notifications.map(
+      (n: NotificationItem) => n.event
     );
-    expect((randomElement(body.data.notifications) as any).userId).toBe(
-      user.id
-    );
-    const events = body.data.notifications.map((n: any) => n.event);
     expect(events).toContain(NotificationEventType.MentionedInComment);
   });
 
@@ -186,9 +192,8 @@ describe("#notifications.list", () => {
       }),
     ]);
 
-    const res = await server.post("/api/notifications.list", {
+    const res = await server.post("/api/notifications.list", user, {
       body: {
-        token: user.getJwtToken(),
         archived: true,
       },
     });
@@ -198,13 +203,15 @@ describe("#notifications.list", () => {
     expect(body.data.notifications.length).toBe(2);
     expect(body.pagination.total).toBe(2);
     expect(body.data.unseen).toBe(2);
-    expect((randomElement(body.data.notifications) as any).actor.id).toBe(
-      actor.id
+    expect(
+      randomElement<NotificationItem>(body.data.notifications).actor.id
+    ).toBe(actor.id);
+    expect(
+      randomElement<NotificationItem>(body.data.notifications).userId
+    ).toBe(user.id);
+    const events = body.data.notifications.map(
+      (n: NotificationItem) => n.event
     );
-    expect((randomElement(body.data.notifications) as any).userId).toBe(
-      user.id
-    );
-    const events = body.data.notifications.map((n: any) => n.event);
     expect(events).toContain(NotificationEventType.CreateComment);
     expect(events).toContain(NotificationEventType.UpdateDocument);
   });
@@ -252,9 +259,8 @@ describe("#notifications.list", () => {
       }),
     ]);
 
-    const res = await server.post("/api/notifications.list", {
+    const res = await server.post("/api/notifications.list", user, {
       body: {
-        token: user.getJwtToken(),
         archived: false,
       },
     });
@@ -264,13 +270,15 @@ describe("#notifications.list", () => {
     expect(body.data.notifications.length).toBe(1);
     expect(body.pagination.total).toBe(1);
     expect(body.data.unseen).toBe(1);
-    expect((randomElement(body.data.notifications) as any).actor.id).toBe(
-      actor.id
+    expect(
+      randomElement<NotificationItem>(body.data.notifications).actor.id
+    ).toBe(actor.id);
+    expect(
+      randomElement<NotificationItem>(body.data.notifications).userId
+    ).toBe(user.id);
+    const events = body.data.notifications.map(
+      (n: NotificationItem) => n.event
     );
-    expect((randomElement(body.data.notifications) as any).userId).toBe(
-      user.id
-    );
-    const events = body.data.notifications.map((n: any) => n.event);
     expect(events).toContain(NotificationEventType.MentionedInComment);
   });
 });
@@ -334,7 +342,7 @@ describe("#notifications.pixel", () => {
   it("should return 404 for notification that does not exist", async () => {
     const res = await server.get(
       `/api/notifications.pixel?${queryString.stringify({
-        id: uuidv4(),
+        id: randomUUID(),
         token: "invalid-token",
       })}`
     );
@@ -370,9 +378,8 @@ describe("#notifications.update", () => {
 
     expect(notification.viewedAt).toBeNull();
 
-    const res = await server.post("/api/notifications.update", {
+    const res = await server.post("/api/notifications.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: notification.id,
         viewedAt: new Date(),
       },
@@ -410,9 +417,8 @@ describe("#notifications.update", () => {
 
     expect(notification.archivedAt).toBeNull();
 
-    const res = await server.post("/api/notifications.update", {
+    const res = await server.post("/api/notifications.update", user, {
       body: {
-        token: user.getJwtToken(),
         id: notification.id,
         archivedAt: new Date(),
       },
@@ -468,11 +474,7 @@ describe("#notifications.update_all", () => {
       }),
     ]);
 
-    const res = await server.post("/api/notifications.update_all", {
-      body: {
-        token: user.getJwtToken(),
-      },
-    });
+    const res = await server.post("/api/notifications.update_all", user);
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.success).toBe(true);
@@ -521,9 +523,8 @@ describe("#notifications.update_all", () => {
       }),
     ]);
 
-    const res = await server.post("/api/notifications.update_all", {
+    const res = await server.post("/api/notifications.update_all", user, {
       body: {
-        token: user.getJwtToken(),
         viewedAt: new Date(),
       },
     });
@@ -576,9 +577,8 @@ describe("#notifications.update_all", () => {
       }),
     ]);
 
-    const res = await server.post("/api/notifications.update_all", {
+    const res = await server.post("/api/notifications.update_all", user, {
       body: {
-        token: user.getJwtToken(),
         viewedAt: null,
       },
     });
@@ -630,9 +630,8 @@ describe("#notifications.update_all", () => {
       }),
     ]);
 
-    const res = await server.post("/api/notifications.update_all", {
+    const res = await server.post("/api/notifications.update_all", user, {
       body: {
-        token: user.getJwtToken(),
         archivedAt: new Date(),
       },
     });
@@ -685,9 +684,8 @@ describe("#notifications.update_all", () => {
       }),
     ]);
 
-    const res = await server.post("/api/notifications.update_all", {
+    const res = await server.post("/api/notifications.update_all", user, {
       body: {
-        token: user.getJwtToken(),
         archivedAt: null,
       },
     });
@@ -695,5 +693,42 @@ describe("#notifications.update_all", () => {
     expect(res.status).toBe(200);
     expect(body.success).toBe(true);
     expect(body.data.total).toBe(2);
+  });
+});
+
+describe("#notifications.unsubscribe", () => {
+  it("should allow unsubscribe with valid token", async () => {
+    const user = await buildUser();
+    const token = NotificationSettingsHelper.unsubscribeToken(
+      user.id,
+      NotificationEventType.UpdateDocument
+    );
+
+    const res = await server.get(
+      `/api/notifications.unsubscribe?userId=${user.id}&token=${token}&eventType=documents.update&follow=true`,
+      {
+        redirect: "manual",
+      }
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain(
+      "/settings/notifications?success"
+    );
+
+    const events = (await user.reload()).notificationSettings;
+    expect(events["documents.update"]).toBe(false);
+  });
+
+  it("should not allow unsubscribe with invalid token", async () => {
+    const user = await buildUser();
+
+    const res = await server.get(
+      `/api/notifications.unsubscribe?userId=${user.id}&token=invalid-token&eventType=documents.update&follow=true`,
+      {
+        redirect: "manual",
+      }
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain("?notice=invalid-auth");
   });
 });

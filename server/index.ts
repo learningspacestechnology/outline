@@ -1,18 +1,21 @@
-/* eslint-disable @typescript-eslint/no-misused-promises */
-/* eslint-disable import/order */
+/* oxlint-disable @typescript-eslint/no-misused-promises */
+/* oxlint-disable import/order */
+import { toError } from "@shared/utils/error";
 import env from "./env";
 
 import "./logging/tracer"; // must come before importing any instrumented module
 
-import http from "http";
-import https from "https";
+import http from "node:http";
+import https from "node:https";
+import type { Context } from "koa";
 import Koa from "koa";
 import helmet from "koa-helmet";
 import logger from "koa-logger";
 import Router from "koa-router";
-import { AddressInfo } from "net";
+import type { AddressInfo } from "node:net";
 import stoppable from "stoppable";
 import throng from "throng";
+import { escape } from "es-toolkit/compat";
 import Logger from "./logging/Logger";
 import services from "./services";
 import { getArg } from "./utils/args";
@@ -23,19 +26,21 @@ import { checkUpdates } from "./utils/updates";
 import onerror from "./onerror";
 import ShutdownHelper, { ShutdownOrder } from "./utils/ShutdownHelper";
 import { checkConnection, sequelize } from "./storage/database";
-import RedisAdapter from "./storage/redis";
-import Metrics from "./logging/Metrics";
+import Redis from "@server/storage/redis";
+import Metrics from "@server/logging/Metrics";
+import { CacheHelper } from "./utils/CacheHelper";
+import { RedisPrefixHelper } from "./utils/RedisPrefixHelper";
 import { PluginManager } from "./utils/PluginManager";
 
 // The number of processes to run, defaults to the number of CPU's available
-// for the web service, and 1 for collaboration during the beta period.
+// for the web service, and 1 for collaboration unless REDIS_COLLABORATION_URL is set.
 let webProcessCount = env.WEB_CONCURRENCY;
 
-if (env.SERVICES.includes("collaboration")) {
+if (env.SERVICES.includes("collaboration") && !env.REDIS_COLLABORATION_URL) {
   if (webProcessCount !== 1) {
     Logger.info(
       "lifecycle",
-      "Note: Restricting process count to 1 due to use of collaborative service"
+      "Note: Restricting process count to 1 due to use of collaborative service without REDIS_COLLABORATION_URL"
     );
   }
 
@@ -58,6 +63,11 @@ async function master() {
 async function start(_id: number, disconnect: () => void) {
   // Ensure plugins are loaded
   PluginManager.loadPlugins();
+
+  // Clear unfurl cache in development so code changes take effect immediately
+  if (env.isDevelopment) {
+    void CacheHelper.clearData(RedisPrefixHelper.getUnfurlKey(""));
+  }
 
   // Find if SSL certs are available
   const ssl = getSSLOptions();
@@ -88,13 +98,61 @@ async function start(_id: number, disconnect: () => void) {
   app.use(defaultRateLimiter());
 
   /** Perform a redirect on the browser so that the user's auth cookies are included in the request. */
-  app.context.redirectOnClient = function (url: string) {
+  app.context.redirectOnClient = function (
+    this: Context,
+    /** The URL to redirect to */
+    url: string,
+    /**
+     * The HTTP method to use for the redirect. Use POST when preventing links in emails from being
+     * clicked by bots. Otherwise, use GET.
+     */
+    method: "GET" | "POST" = "GET"
+  ) {
     this.type = "text/html";
-    this.body = `
-<html>
+
+    if (method === "POST") {
+      // For POST method, create a form that auto-submits
+      const urlObj = new URL(url);
+      const formAction = `${urlObj.origin}${urlObj.pathname}`;
+      const searchParams = urlObj.searchParams;
+
+      let formFields = "";
+      searchParams.forEach((value, key) => {
+        formFields += `<input type="hidden" name="${escape(
+          key
+        )}" value="${escape(value)}" />`;
+      });
+
+      if (this.userAgent.isBot) {
+        formFields += `
+          <p>If you are not redirected automatically, please click the button below.</p>
+          <input type="submit" value="Continue" />
+        `;
+      }
+
+      this.body = `
+<html lang="en">
 <head>
-<meta http-equiv="refresh" content="0;URL='${url}'"/>
-</head>`;
+  <title>Redirecting…</title>
+</head>
+<body>
+  <form id="redirect-form" method="POST" action="${formAction}">
+    ${formFields}
+  </form>
+  <script nonce="${this.state.cspNonce}">
+    ${!this.userAgent.isBot} && document.getElementById('redirect-form').submit();
+  </script>
+</body>
+</html>`;
+    } else {
+      // Default GET method using meta refresh
+      this.body = `
+<html lang="en">
+<head>
+<meta http-equiv="refresh" content="0;URL='${escape(url)}'" />
+</head>
+</html>`;
+    }
   };
 
   // Add a health check endpoint to all services
@@ -102,15 +160,15 @@ async function start(_id: number, disconnect: () => void) {
     try {
       await sequelize.query("SELECT 1");
     } catch (err) {
-      Logger.error("Database connection failed", err);
+      Logger.error("Database connection failed", toError(err));
       ctx.status = 500;
       return;
     }
 
     try {
-      await RedisAdapter.defaultClient.ping();
+      await Redis.defaultClient.ping();
     } catch (err) {
-      Logger.error("Redis ping failed", err);
+      Logger.error("Redis ping failed", toError(err));
       ctx.status = 500;
       return;
     }
@@ -127,13 +185,13 @@ async function start(_id: number, disconnect: () => void) {
     }
 
     Logger.info("lifecycle", `Starting ${name} service`);
-    const init = services[name as keyof typeof services];
-    init(app, server as https.Server, env.SERVICES);
+    const { default: init } = await services[name as keyof typeof services]();
+    await Promise.resolve(init(app, server as https.Server, env.SERVICES));
   }
 
   server.on("error", (err) => {
     if ("code" in err && err.code === "EADDRINUSE") {
-      Logger.error(`Port ${normalizedPort}  is already in use. Exiting…`, err);
+      Logger.error(`Port ${normalizedPort} is already in use. Exiting…`, err);
       process.exit(0);
     }
 
@@ -201,8 +259,11 @@ const isWebProcess =
   env.SERVICES.includes("api") ||
   env.SERVICES.includes("collaboration");
 
+const isWorkerProcess =
+  env.SERVICES.length === 1 && env.SERVICES.includes("worker");
+
 void throng({
   master,
   worker: start,
-  count: isWebProcess ? webProcessCount : undefined,
+  count: isWorkerProcess ? 1 : isWebProcess ? webProcessCount : undefined,
 });

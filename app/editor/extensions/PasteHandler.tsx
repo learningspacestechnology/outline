@@ -1,36 +1,34 @@
 import { action, observable } from "mobx";
+import { v4 as uuidv4 } from "uuid";
 import { toggleMark } from "prosemirror-commands";
+import type { Node } from "prosemirror-model";
 import { Slice } from "prosemirror-model";
-import {
-  EditorState,
-  Plugin,
-  PluginKey,
-  TextSelection,
-} from "prosemirror-state";
+import type { EditorState } from "prosemirror-state";
+import { Plugin, PluginKey, TextSelection } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
-import * as React from "react";
-import { v4 } from "uuid";
-import Extension, { WidgetProps } from "@shared/editor/lib/Extension";
+import type { WidgetProps } from "@shared/editor/lib/Extension";
+import Extension from "@shared/editor/lib/Extension";
 import { codeLanguages } from "@shared/editor/lib/code";
 import isMarkdown from "@shared/editor/lib/isMarkdown";
 import normalizePastedMarkdown from "@shared/editor/lib/markdown/normalize";
 import { isRemoteTransaction } from "@shared/editor/lib/multiplayer";
 import { recreateTransform } from "@shared/editor/lib/prosemirror-recreate-transform";
 import { isInCode } from "@shared/editor/queries/isInCode";
-import { MenuItem } from "@shared/editor/types";
+import { isList } from "@shared/editor/queries/isList";
+import type { MenuItem } from "@shared/editor/types";
 import { IconType, MentionType } from "@shared/types";
 import { determineIconType } from "@shared/utils/icon";
 import parseCollectionSlug from "@shared/utils/parseCollectionSlug";
 import parseDocumentSlug from "@shared/utils/parseDocumentSlug";
 import { isCollectionUrl, isDocumentUrl, isUrl } from "@shared/utils/urls";
 import stores from "~/stores";
-import PasteMenu from "../components/PasteMenu";
+import { PasteMenu } from "../components/PasteMenu";
 
 export default class PasteHandler extends Extension {
   state: {
     open: boolean;
     query: string;
-    pastedText: string;
+    pastedText: string | string[];
   } = observable({
     open: false,
     query: "",
@@ -57,15 +55,11 @@ export default class PasteHandler extends Extension {
           },
           handleDOMEvents: {
             keydown: (_, event) => {
-              if (event.key === "Shift") {
-                this.shiftKey = true;
-              }
+              this.shiftKey = event.shiftKey;
               return false;
             },
             keyup: (_, event) => {
-              if (event.key === "Shift") {
-                this.shiftKey = false;
-              }
+              this.shiftKey = event.shiftKey;
               return false;
             },
           },
@@ -110,22 +104,31 @@ export default class PasteHandler extends Extension {
                 return false;
               }
 
-              // Check if the clipboard contents can be parsed as a single url
-              if (isUrl(text)) {
+              // If the HTML on the clipboard is from Claude then the best
+              // compatability is to just use the HTML parser.
+              if (html?.includes("font-claude-response-body")) {
+                return false;
+              }
+
+              // Check if the clipboard contents can be parsed as a single url.
+              // Trim first so surrounding whitespace from the clipboard (e.g. a
+              // trailing newline appended by the source) doesn't prevent URL
+              // detection and skip the paste menu.
+              const trimmedText = text.trim();
+              if (isUrl(trimmedText)) {
                 // If there is selected text then we want to wrap it in a link to the url
                 if (!state.selection.empty) {
-                  toggleMark(this.editor.schema.marks.link, { href: text })(
-                    state,
-                    dispatch
-                  );
+                  toggleMark(this.editor.schema.marks.link, {
+                    href: trimmedText,
+                  })(state, dispatch);
                   return true;
                 }
 
                 // Is the link a link to a document? If so, we can grab the title and insert it.
-                const containsHash = text.includes("#");
+                const containsHash = trimmedText.includes("#");
 
-                if (isDocumentUrl(text)) {
-                  const slug = parseDocumentSlug(text);
+                if (isDocumentUrl(trimmedText)) {
+                  const slug = parseDocumentSlug(trimmedText);
 
                   if (slug) {
                     void stores.documents
@@ -144,12 +147,12 @@ export default class PasteHandler extends Extension {
                                   type: MentionType.Document,
                                   modelId: document.id,
                                   label: document.titleWithDefault,
-                                  id: v4(),
+                                  id: uuidv4(),
                                 })
                               )
                             );
                           } else {
-                            const { hash } = new URL(text);
+                            const { hash } = new URL(trimmedText);
                             const hasEmoji =
                               determineIconType(document.icon) ===
                               IconType.Emoji;
@@ -166,11 +169,11 @@ export default class PasteHandler extends Extension {
                         if (view.isDestroyed) {
                           return;
                         }
-                        this.insertLink(text);
+                        this.insertLink(trimmedText);
                       });
                   }
-                } else if (isCollectionUrl(text)) {
-                  const slug = parseCollectionSlug(text);
+                } else if (isCollectionUrl(trimmedText)) {
+                  const slug = parseCollectionSlug(trimmedText);
 
                   if (slug) {
                     stores.collections
@@ -189,12 +192,12 @@ export default class PasteHandler extends Extension {
                                   type: MentionType.Collection,
                                   modelId: collection.id,
                                   label: collection.name,
-                                  id: v4(),
+                                  id: uuidv4(),
                                 })
                               )
                             );
                           } else {
-                            const { hash } = new URL(text);
+                            const { hash } = new URL(trimmedText);
                             const hasEmoji =
                               determineIconType(collection.icon) ===
                               IconType.Emoji;
@@ -211,11 +214,11 @@ export default class PasteHandler extends Extension {
                         if (view.isDestroyed) {
                           return;
                         }
-                        this.insertLink(text);
+                        this.insertLink(trimmedText);
                       });
                   }
                 } else {
-                  this.insertLink(text);
+                  this.insertLink(trimmedText);
                 }
 
                 return true;
@@ -282,21 +285,22 @@ export default class PasteHandler extends Extension {
 
               const slice = paste.slice(0);
               const tr = view.state.tr;
-              let currentPos = view.state.selection.from;
 
-              // If the pasted content is a single paragraph then we loop over
-              // it's content and insert each node one at a time to allow it to
-              // be pasted inline with surrounding content.
+              // If the pasted content is a single paragraph then we slice
+              // the outer paragraph so that the text is inserted directly.
               const singleNode = sliceSingleNode(slice);
               if (singleNode?.type === this.editor.schema.nodes.paragraph) {
-                singleNode.forEach((node) => {
-                  tr.insert(currentPos, node);
-                  currentPos += node.nodeSize;
-                });
+                const slice = new Slice(singleNode.content, 0, 0);
+                tr.replaceSelection(slice);
+              } else if (singleNode) {
+                if (isList(singleNode, this.editor.schema)) {
+                  this.handleList(singleNode);
+                  return true;
+                } else {
+                  tr.replaceSelectionWith(singleNode, this.shiftKey);
+                }
               } else {
-                singleNode
-                  ? tr.replaceSelectionWith(singleNode, this.shiftKey)
-                  : tr.replaceSelection(slice);
+                tr.replaceSelection(slice);
               }
 
               view.dispatch(
@@ -349,7 +353,7 @@ export default class PasteHandler extends Extension {
                   simplifyDiff: true,
                 }).mapping;
               } catch (err) {
-                // eslint-disable-next-line no-console
+                // oxlint-disable-next-line no-console
                 console.warn("Failed to recreate transform: ", err);
               }
             }
@@ -375,7 +379,7 @@ export default class PasteHandler extends Extension {
 
   private shiftKey = false;
 
-  private showPasteMenu = action((text: string) => {
+  private showPasteMenu = action((text: string | string[]) => {
     this.state.pastedText = text;
     this.state.open = true;
   });
@@ -401,7 +405,7 @@ export default class PasteHandler extends Extension {
   private insertEmbed = () => {
     const { view } = this.editor;
     const { state } = view;
-    const result = this.findPlaceholder(state, this.state.pastedText);
+    const result = this.findPlaceholder(state, this.placeholderId());
 
     if (result) {
       const tr = state.tr.deleteRange(result[0], result[1]);
@@ -411,19 +415,126 @@ export default class PasteHandler extends Extension {
     }
 
     this.editor.commands.embed({
-      href: this.state.pastedText,
+      href: this.state.pastedText as string,
     });
   };
+
+  private insertMention = () => {
+    const { view } = this.editor;
+    const { state } = view;
+    const result = this.findPlaceholder(state, this.placeholderId());
+
+    // Remove just the placeholder here.
+    // Mention node will be created by SuggestionsMenu.
+    if (result) {
+      const tr = state.tr.deleteRange(result[0], result[1]);
+      view.dispatch(
+        tr.setSelection(TextSelection.near(tr.doc.resolve(result[0])))
+      );
+    }
+  };
+
+  private insertMentionList = () => {
+    const { view } = this.editor;
+    const { state } = view;
+    const result = this.findPlaceholder(state, this.placeholderId());
+
+    // Remove just the placeholder here.
+    // Mention list will be created by SuggestionsMenu.
+    if (result) {
+      const tr = state.tr.setMeta(this.key, {
+        remove: { id: this.placeholderId() },
+      });
+
+      view.dispatch(
+        tr.setSelection(TextSelection.near(tr.doc.resolve(result[0])))
+      );
+    }
+  };
+
+  // Not a list of embeds technically, but inserts many embeds at once.
+  private insertEmbedList = () => {
+    const { view } = this.editor;
+    const { state } = view;
+    const result = this.findPlaceholder(state, this.placeholderId());
+
+    // Remove just the placeholder here.
+    // Embed list will be created by SuggestionsMenu.
+    if (result) {
+      const tr = state.tr.setMeta(this.key, {
+        remove: { id: this.placeholderId() },
+      });
+
+      view.dispatch(
+        tr.setSelection(TextSelection.near(tr.doc.resolve(result[0])))
+      );
+    }
+  };
+
+  private handleList(listNode: Node) {
+    const { view, schema } = this.editor;
+    const { state } = view;
+    const { from } = state.selection;
+    let tr = state.tr;
+
+    const links: string[] = [];
+    let allLinks = true;
+    listNode.descendants((node) => {
+      if (!allLinks) {
+        return false;
+      }
+
+      if (isList(node, schema) || node.type.name === "list_item") {
+        return true;
+      }
+
+      if (node.type.name === "paragraph" && isUrl(node.textContent)) {
+        links.push(node.textContent);
+        return false;
+      }
+
+      allLinks = false;
+      return false;
+    });
+
+    const showPasteMenu = allLinks && links.length;
+
+    // it's possible that the links can be converted to mentions
+    if (showPasteMenu) {
+      const placeholderId = links[0];
+      const to = from + listNode.nodeSize;
+
+      tr = state.tr.replaceSelectionWith(listNode).setMeta(this.key, {
+        add: { from, to, id: placeholderId },
+      });
+    } else {
+      // Paste as simple list
+      tr = tr.replaceSelectionWith(listNode, this.shiftKey);
+    }
+
+    view.dispatch(tr);
+
+    if (showPasteMenu) {
+      this.showPasteMenu(links);
+    }
+  }
+
+  private placeholderId = () =>
+    typeof this.state.pastedText === "string"
+      ? this.state.pastedText
+      : this.state.pastedText[0];
 
   private removePlaceholder = () => {
     const { view } = this.editor;
     const { state } = view;
-    const result = this.findPlaceholder(state, this.state.pastedText);
+
+    const placeholderId = this.placeholderId();
+    const result = this.findPlaceholder(state, placeholderId);
 
     if (result) {
       view.dispatch(
         state.tr.setMeta(this.key, {
-          remove: { id: this.state.pastedText },
+          remove: { id: placeholderId },
         })
       );
     }
@@ -448,6 +559,21 @@ export default class PasteHandler extends Extension {
       case "embed": {
         this.hidePasteMenu();
         this.insertEmbed();
+        break;
+      }
+      case "mention": {
+        this.hidePasteMenu();
+        this.insertMention();
+        break;
+      }
+      case "mention_list": {
+        this.hidePasteMenu();
+        this.insertMentionList();
+        break;
+      }
+      case "embed_list": {
+        this.hidePasteMenu();
+        this.insertEmbedList();
         break;
       }
       default:
@@ -531,7 +657,7 @@ function parseSingleIframeSrc(html: string) {
         return src;
       }
     }
-  } catch (e) {
+  } catch (_err) {
     // Ignore the million ways parsing could fail.
   }
   return undefined;

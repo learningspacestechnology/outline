@@ -1,15 +1,34 @@
 import { toggleMark } from "prosemirror-commands";
-import { MarkSpec, MarkType, Schema, Mark as PMMark } from "prosemirror-model";
-import { Command, Plugin } from "prosemirror-state";
+import type { MarkSpec, MarkType, Mark as PMMark } from "prosemirror-model";
+import type { Command } from "prosemirror-state";
+import { Plugin } from "prosemirror-state";
 import { v4 as uuidv4 } from "uuid";
-import { addMark } from "../commands/addMark";
 import { collapseSelection } from "../commands/collapseSelection";
+import { addComment } from "../commands/comment";
 import { chainTransactions } from "../lib/chainTransactions";
 import { isMarkActive } from "../queries/isMarkActive";
 import { EditorStyleHelper } from "../styles/EditorStyleHelper";
 import Mark from "./Mark";
 
-export default class Comment extends Mark {
+/**
+ * Options for the Comment mark.
+ */
+type CommentOptions = {
+  /** The id of the current user, recorded on newly created comment marks. */
+  userId?: string;
+  /** Callback invoked when a comment mark is created in the document. */
+  onCreateCommentMark?: (
+    commentId: string,
+    userId: string,
+    options?: { focus: boolean }
+  ) => void;
+  /** Callback invoked when an existing comment mark is clicked. */
+  onClickCommentMark?: (commentId: string) => void;
+  /** Callback invoked to request that the comments sidebar be opened. */
+  onOpenCommentsSidebar?: () => void;
+};
+
+export default class Comment extends Mark<CommentOptions> {
   get name() {
     return "comment";
   }
@@ -69,58 +88,42 @@ export default class Comment extends Mark {
   }
 
   keys({ type }: { type: MarkType }): Record<string, Command> {
-    return this.options.onCreateCommentMark
-      ? {
-          "Mod-Alt-m": (state, dispatch) => {
-            if (
-              isMarkActive(state.schema.marks.comment, {
-                resolved: false,
-              })(state)
-            ) {
-              return false;
-            }
-
-            chainTransactions(
-              toggleMark(type, {
-                id: uuidv4(),
-                userId: this.options.userId,
-                draft: true,
-              }),
-              collapseSelection()
-            )(state, dispatch);
-
-            return true;
-          },
-        }
-      : {};
-  }
-
-  commands({ type }: { type: MarkType; schema: Schema }) {
-    return this.options.onCreateCommentMark
-      ? (): Command => (state, dispatch) => {
-          if (
-            isMarkActive(
-              state.schema.marks.comment,
-              {
-                resolved: false,
-              },
-              { exact: true }
-            )(state)
-          ) {
-            return false;
-          }
-
-          chainTransactions(
-            addMark(type, {
-              id: uuidv4(),
-              userId: this.options.userId,
-              draft: true,
-            }),
-            collapseSelection()
-          )(state, dispatch);
-
+    return {
+      "Mod-Alt-m": (state, dispatch) => {
+        if (state.selection.empty && this.options.onOpenCommentsSidebar) {
+          this.options.onOpenCommentsSidebar();
           return true;
         }
+
+        if (!this.options.onCreateCommentMark) {
+          return false;
+        }
+
+        if (
+          isMarkActive(state.schema.marks.comment, {
+            resolved: false,
+          })(state)
+        ) {
+          return false;
+        }
+
+        chainTransactions(
+          toggleMark(type, {
+            id: uuidv4(),
+            userId: this.options.userId,
+            draft: true,
+          }),
+          collapseSelection()
+        )(state, dispatch);
+
+        return true;
+      },
+    };
+  }
+
+  commands() {
+    return this.options.onCreateCommentMark
+      ? (): Command => addComment({ userId: this.options.userId })
       : undefined;
   }
 

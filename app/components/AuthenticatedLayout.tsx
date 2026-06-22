@@ -1,41 +1,37 @@
-import { AnimatePresence } from "framer-motion";
 import { observer } from "mobx-react";
 import * as React from "react";
-import { Switch, Route, useLocation, matchPath } from "react-router-dom";
-import { TeamPreference } from "@shared/types";
+import { DndProvider } from "react-dnd";
+import { useLocation } from "react-router-dom";
+import { EditorAwareHTML5Backend } from "~/components/EditorAwareHTML5Backend";
 import ErrorSuspended from "~/scenes/Errors/ErrorSuspended";
 import Layout from "~/components/Layout";
 import RegisterKeyDown from "~/components/RegisterKeyDown";
+import { RightSidebarProvider } from "~/components/RightSidebarContext";
 import Sidebar from "~/components/Sidebar";
-import SidebarRight from "~/components/Sidebar/Right";
-import SettingsSidebar from "~/components/Sidebar/Settings";
 import useCurrentTeam from "~/hooks/useCurrentTeam";
+import useKeyDown from "~/hooks/useKeyDown";
+import { usePostLoginPath } from "~/hooks/useLastVisitedPath";
 import usePolicy from "~/hooks/usePolicy";
 import useStores from "~/hooks/useStores";
+import Logger from "~/utils/Logger";
 import history from "~/utils/history";
+import { isModKey } from "@shared/utils/keyboard";
 import lazyWithRetry from "~/utils/lazyWithRetry";
 import {
   searchPath,
   newDocumentPath,
   settingsPath,
-  matchDocumentHistory,
-  matchDocumentSlug as slug,
-  matchDocumentInsights,
+  homePath,
 } from "~/utils/routeHelpers";
 import { DocumentContextProvider } from "./DocumentContext";
 import Fade from "./Fade";
+import NotificationBadge from "./NotificationBadge";
 import { PortalContext } from "./Portal";
+import CommandBar from "./CommandBar";
 
-const DocumentComments = lazyWithRetry(
-  () => import("~/scenes/Document/components/Comments")
+const SettingsSidebar = lazyWithRetry(
+  () => import("~/components/Sidebar/Settings")
 );
-const DocumentHistory = lazyWithRetry(
-  () => import("~/scenes/Document/components/History")
-);
-const DocumentInsights = lazyWithRetry(
-  () => import("~/scenes/Document/components/Insights")
-);
-const CommandBar = lazyWithRetry(() => import("~/components/CommandBar"));
 
 type Props = {
   children?: React.ReactNode;
@@ -45,9 +41,15 @@ const AuthenticatedLayout: React.FC = ({ children }: Props) => {
   const { ui, auth } = useStores();
   const location = useLocation();
   const layoutRef = React.useRef<HTMLDivElement>(null);
-  const can = usePolicy(ui.activeDocumentId);
   const canCollection = usePolicy(ui.activeCollectionId);
   const team = useCurrentTeam();
+  const [spendPostLoginPath] = usePostLoginPath();
+
+  useKeyDown(".", (event) => {
+    if (isModKey(event)) {
+      ui.toggleCollapsedSidebar();
+    }
+  });
 
   const goToSearch = (ev: KeyboardEvent) => {
     if (!ev.metaKey && !ev.ctrlKey) {
@@ -68,72 +70,54 @@ const AuthenticatedLayout: React.FC = ({ children }: Props) => {
     history.push(newDocumentPath(activeCollectionId));
   };
 
+  React.useEffect(() => {
+    const postLoginPath = spendPostLoginPath();
+    if (postLoginPath) {
+      try {
+        history.replace(postLoginPath);
+      } catch (err) {
+        Logger.warn("Failed to navigate to post login path, falling back", {
+          path: postLoginPath,
+          error: err,
+        });
+        history.replace(homePath());
+      }
+    }
+  }, [spendPostLoginPath]);
+
   if (auth.isSuspended) {
     return <ErrorSuspended />;
   }
 
+  const isSettings = location.pathname.startsWith(settingsPath());
+
   const sidebar = (
     <Fade>
-      <Switch>
-        <Route path={settingsPath()} component={SettingsSidebar} />
-        <Route component={Sidebar} />
-      </Switch>
+      <React.Suspense fallback={null}>
+        {isSettings && <SettingsSidebar />}
+      </React.Suspense>
+      <div style={isSettings ? { display: "none" } : undefined}>
+        <Sidebar />
+      </div>
     </Fade>
-  );
-
-  const showHistory =
-    !!matchPath(location.pathname, {
-      path: matchDocumentHistory,
-    }) && can.listRevisions;
-  const showInsights =
-    !!matchPath(location.pathname, {
-      path: matchDocumentInsights,
-    }) && can.listViews;
-  const showComments =
-    !showInsights &&
-    !showHistory &&
-    can.comment &&
-    ui.activeDocumentId &&
-    ui.commentsExpanded &&
-    team.getPreference(TeamPreference.Commenting);
-
-  const sidebarRight = (
-    <AnimatePresence
-      initial={false}
-      key={ui.activeDocumentId ? "active" : "inactive"}
-    >
-      {(showHistory || showInsights || showComments) && (
-        <Route path={`/doc/${slug}`}>
-          <SidebarRight>
-            <React.Suspense fallback={null}>
-              {showHistory && <DocumentHistory />}
-              {showInsights && <DocumentInsights />}
-              {showComments && <DocumentComments />}
-            </React.Suspense>
-          </SidebarRight>
-        </Route>
-      )}
-    </AnimatePresence>
   );
 
   return (
     <DocumentContextProvider>
-      <PortalContext.Provider value={layoutRef.current}>
-        <Layout
-          title={team.name}
-          sidebar={sidebar}
-          sidebarRight={sidebarRight}
-          ref={layoutRef}
-        >
-          <RegisterKeyDown trigger="n" handler={goToNewDocument} />
-          <RegisterKeyDown trigger="t" handler={goToSearch} />
-          <RegisterKeyDown trigger="/" handler={goToSearch} />
-          {children}
-          <React.Suspense fallback={null}>
-            <CommandBar />
-          </React.Suspense>
-        </Layout>
-      </PortalContext.Provider>
+      <RightSidebarProvider>
+        <PortalContext.Provider value={layoutRef.current}>
+          <DndProvider backend={EditorAwareHTML5Backend}>
+            <Layout title={team.name} sidebar={sidebar} ref={layoutRef}>
+              <RegisterKeyDown trigger="n" handler={goToNewDocument} />
+              <RegisterKeyDown trigger="t" handler={goToSearch} />
+              <RegisterKeyDown trigger="/" handler={goToSearch} />
+              {children}
+              <CommandBar />
+              <NotificationBadge />
+            </Layout>
+          </DndProvider>
+        </PortalContext.Provider>
+      </RightSidebarProvider>
     </DocumentContextProvider>
   );
 };

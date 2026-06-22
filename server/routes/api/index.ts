@@ -1,11 +1,17 @@
-import Koa, { BaseContext } from "koa";
+import type { BaseContext } from "koa";
+import Koa from "koa";
 import bodyParser from "koa-body";
 import Router from "koa-router";
-import userAgent, { UserAgentContext } from "koa-useragent";
+import type { UserAgentContext } from "koa-useragent";
+import userAgent from "koa-useragent";
 import env from "@server/env";
 import { NotFoundError } from "@server/errors";
+import { apiContext } from "@server/middlewares/apiContext";
 import coalesceBody from "@server/middlewares/coaleseBody";
-import { AppState, AppContext } from "@server/types";
+import requestContextMiddleware from "@server/middlewares/requestContext";
+import requestTracer from "@server/middlewares/requestTracer";
+import { verifyCSRFToken } from "@server/middlewares/csrf";
+import type { AppState, AppContext } from "@server/types";
 import { Hook, PluginManager } from "@server/utils/PluginManager";
 import apiKeys from "./apiKeys";
 import attachments from "./attachments";
@@ -16,6 +22,7 @@ import comments from "./comments/comments";
 import cron from "./cron";
 import developer from "./developer";
 import documents from "./documents";
+import emojis from "./emojis";
 import events from "./events";
 import fileOperationsRoute from "./fileOperations";
 import groupMemberships from "./groupMemberships";
@@ -25,11 +32,13 @@ import installation from "./installation";
 import integrations from "./integrations";
 import apiErrorHandler from "./middlewares/apiErrorHandler";
 import apiResponse from "./middlewares/apiResponse";
-import apiTracer from "./middlewares/apiTracer";
 import editor from "./middlewares/editor";
 import notifications from "./notifications";
+import oauthAuthentications from "./oauthAuthentications";
+import oauthClients from "./oauthClients";
 import pins from "./pins";
 import reactions from "./reactions";
+import relationships from "./relationships";
 import revisions from "./revisions";
 import searches from "./searches";
 import shares from "./shares";
@@ -37,15 +46,18 @@ import stars from "./stars";
 import subscriptions from "./subscriptions";
 import suggestions from "./suggestions";
 import teams from "./teams";
+import templates from "./templates";
 import urls from "./urls";
 import userMemberships from "./userMemberships";
 import users from "./users";
 import views from "./views";
+import accessRequests from "./accessRequests";
 
 const api = new Koa<AppState, AppContext>();
 const router = new Router();
 
 // middlewares
+api.use(requestContextMiddleware());
 api.use(
   bodyParser({
     multipart: true,
@@ -56,14 +68,17 @@ api.use(
       ),
       maxFieldsSize: 10 * 1024 * 1024,
     },
+    jsonLimit: 5 * 1024 * 1024, // 5MB limit for JSON payloads
   })
 );
 api.use(coalesceBody());
 api.use<BaseContext, UserAgentContext>(userAgent);
-api.use(apiTracer());
+api.use(requestTracer());
 api.use(apiResponse());
 api.use(apiErrorHandler());
 api.use(editor());
+api.use(apiContext());
+api.use(verifyCSRFToken());
 
 // Register plugin API routes before others to allow for overrides
 PluginManager.getHooks(Hook.API).forEach((hook) =>
@@ -78,6 +93,8 @@ router.use("/", users.routes());
 router.use("/", collections.routes());
 router.use("/", comments.routes());
 router.use("/", documents.routes());
+router.use("/", accessRequests.routes());
+router.use("/", emojis.routes());
 router.use("/", pins.routes());
 router.use("/", revisions.routes());
 router.use("/", views.routes());
@@ -88,8 +105,11 @@ router.use("/", stars.routes());
 router.use("/", subscriptions.routes());
 router.use("/", suggestions.routes());
 router.use("/", teams.routes());
+router.use("/", templates.routes());
 router.use("/", integrations.routes());
 router.use("/", notifications.routes());
+router.use("/", oauthAuthentications.routes());
+router.use("/", oauthClients.routes());
 router.use("/", attachments.routes());
 router.use("/", cron.routes());
 router.use("/", groups.routes());
@@ -98,6 +118,7 @@ router.use("/", fileOperationsRoute.routes());
 router.use("/", urls.routes());
 router.use("/", userMemberships.routes());
 router.use("/", reactions.routes());
+router.use("/", relationships.routes());
 router.use("/", imports.routes());
 
 if (!env.isCloudHosted) {

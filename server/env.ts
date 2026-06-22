@@ -1,21 +1,31 @@
-/* eslint-disable no-console */
-// eslint-disable-next-line import/order
+/* oxlint-disable no-console */
+// oxlint-disable-next-line import/order
 import environment from "./utils/environment";
-import os from "os";
+import os from "node:os";
+import wellKnownServices from "nodemailer/lib/well-known/services.json";
 import {
   validate,
   IsNotEmpty,
   IsUrl,
   IsOptional,
-  IsByteLength,
+  IsHexadecimal,
+  Length,
   IsNumber,
   IsIn,
-  IsEmail,
   IsBoolean,
+  Min,
 } from "class-validator";
-import uniq from "lodash/uniq";
+import { uniq } from "es-toolkit/compat";
 import { languages } from "@shared/i18n";
-import { CannotUseWith, CannotUseWithout } from "@server/utils/validators";
+import { Day, Hour } from "@shared/utils/time";
+import {
+  CannotUseWith,
+  CannotUseWithout,
+  CannotUseWithAny,
+  IsInCaseInsensitive,
+  IsDatabaseUrl,
+  IsMailboxAddress,
+} from "@server/utils/validators";
 import Deprecated from "./models/decorators/Deprecated";
 import { getArg } from "./utils/args";
 import { Public, PublicEnvironmentRegister } from "./utils/decorators/Public";
@@ -57,8 +67,9 @@ export class Environment {
    * The secret key is used for encrypting data. Do not change this value once
    * set or your users will be unable to login.
    */
-  @IsByteLength(32, 64, {
-    message: `The SECRET_KEY environment variable is invalid (Use \`openssl rand -hex 32\` to generate a value).`,
+  @IsHexadecimal()
+  @Length(64, 64, {
+    message: `The SECRET_KEY environment variable must be exactly 64 hexadecimal characters (Use \`openssl rand -hex 32\` to generate a value).`,
   })
   public SECRET_KEY = environment.SECRET_KEY ?? "";
 
@@ -72,13 +83,65 @@ export class Environment {
   /**
    * The url of the database.
    */
-  @IsNotEmpty()
-  @IsUrl({
-    require_tld: false,
-    allow_underscores: true,
-    protocols: ["postgres", "postgresql"],
-  })
-  public DATABASE_URL = environment.DATABASE_URL ?? "";
+  @IsOptional()
+  @IsDatabaseUrl()
+  @CannotUseWithAny([
+    "DATABASE_HOST",
+    "DATABASE_PORT",
+    "DATABASE_NAME",
+    "DATABASE_USER",
+    "DATABASE_PASSWORD",
+  ])
+  public DATABASE_URL = this.toOptionalString(environment.DATABASE_URL);
+
+  /**
+   * Optional database URL for read replica to distribute read queries
+   * and reduce load on primary database.
+   */
+  @IsOptional()
+  @IsDatabaseUrl()
+  public DATABASE_READ_ONLY_URL = this.toOptionalString(
+    // Support deprecated variable name for backwards compatibility
+    environment.DATABASE_READ_ONLY_URL ?? environment.DATABASE_URL_READ_ONLY
+  );
+
+  /**
+   * Database host for individual component configuration.
+   */
+  @IsOptional()
+  @CannotUseWith("DATABASE_URL")
+  public DATABASE_HOST = this.toOptionalString(environment.DATABASE_HOST);
+
+  /**
+   * Database port for individual component configuration.
+   */
+  @IsOptional()
+  @IsNumber()
+  @CannotUseWith("DATABASE_URL")
+  public DATABASE_PORT = this.toOptionalNumber(environment.DATABASE_PORT);
+
+  /**
+   * Database name for individual component configuration.
+   */
+  @IsOptional()
+  @CannotUseWith("DATABASE_URL")
+  public DATABASE_NAME = this.toOptionalString(environment.DATABASE_NAME);
+
+  /**
+   * Database user for individual component configuration.
+   */
+  @IsOptional()
+  @CannotUseWith("DATABASE_URL")
+  public DATABASE_USER = this.toOptionalString(environment.DATABASE_USER);
+
+  /**
+   * Database password for individual component configuration.
+   */
+  @IsOptional()
+  @CannotUseWith("DATABASE_URL")
+  public DATABASE_PASSWORD = this.toOptionalString(
+    environment.DATABASE_PASSWORD
+  );
 
   /**
    * An optional database schema.
@@ -90,11 +153,7 @@ export class Environment {
    * The url of the database pool.
    */
   @IsOptional()
-  @IsUrl({
-    require_tld: false,
-    allow_underscores: true,
-    protocols: ["postgres", "postgresql"],
-  })
+  @IsDatabaseUrl()
   public DATABASE_CONNECTION_POOL_URL = this.toOptionalString(
     environment.DATABASE_CONNECTION_POOL_URL
   );
@@ -136,7 +195,36 @@ export class Environment {
   public REDIS_URL = environment.REDIS_URL;
 
   /**
+   * The url of redis for horizontally scaling the collaboration service. If not
+   * set then the collaboration service must be ran as a singleton.
+   */
+  public REDIS_COLLABORATION_URL = environment.REDIS_COLLABORATION_URL;
+
+  /**
+   * The interval in milliseconds between redis connection healthchecks. Each
+   * healthcheck issues a PING and forces a reconnect if it fails.
+   */
+  @IsNumber()
+  @Min(1000)
+  public REDIS_HEALTHCHECK_INTERVAL = parseInt(
+    environment.REDIS_HEALTHCHECK_INTERVAL || "30000",
+    10
+  );
+
+  /**
+   * The timeout in milliseconds for a redis healthcheck PING before the
+   * connection is considered stuck and forcibly reconnected.
+   */
+  @IsNumber()
+  @Min(100)
+  public REDIS_HEALTHCHECK_TIMEOUT = parseInt(
+    environment.REDIS_HEALTHCHECK_TIMEOUT || "5000",
+    10
+  );
+
+  /**
    * The fully qualified, external facing domain name of the server.
+   * If not set, will be derived from HEROKU_APP_NAME for Heroku deployments.
    */
   @Public
   @IsNotEmpty()
@@ -145,7 +233,12 @@ export class Environment {
     require_protocol: true,
     require_tld: false,
   })
-  public URL = (environment.URL ?? "").replace(/\/$/, "");
+  public URL = (
+    environment.URL ??
+    (environment.HEROKU_APP_NAME
+      ? `https://${environment.HEROKU_APP_NAME}.herokuapp.com`
+      : "")
+  ).replace(/\/$/, "");
 
   /**
    * If using a Cloudfront/Cloudflare distribution or similar it can be set below.
@@ -272,6 +365,24 @@ export class Environment {
   public FORCE_HTTPS = this.toBoolean(environment.FORCE_HTTPS ?? "true");
 
   /**
+   * When the app is behind a proxy, sets the HTTP header used for the client IP.
+   * The default value is "X-Forwarded-For", common values are "X-Real-IP"
+   * and "X-Client-IP".
+   */
+  @IsOptional()
+  public PROXY_IP_HEADER = this.toOptionalString(environment.PROXY_IP_HEADER);
+
+  /**
+   * Whether to trust the X-Forwarded-* headers (e.g. X-Forwarded-For,
+   * X-Forwarded-Proto) set by an upstream proxy or load balancer. Defaults to
+   * true for backwards compat. Set to false if not running behind a proxy in production.
+   */
+  @IsBoolean()
+  public PROXY_HEADERS_TRUSTED = this.toBoolean(
+    environment.PROXY_HEADERS_TRUSTED ?? "true"
+  );
+
+  /**
    * Should the installation send anonymized statistics to the maintainers.
    * Defaults to true.
    */
@@ -279,12 +390,6 @@ export class Environment {
   public TELEMETRY = this.toBoolean(
     environment.ENABLE_UPDATES ?? environment.TELEMETRY ?? "true"
   );
-
-  /**
-   * An optional comma separated list of allowed domains.
-   */
-  public ALLOWED_DOMAINS =
-    environment.ALLOWED_DOMAINS ?? environment.GOOGLE_ALLOWED_DOMAINS;
 
   // Third-party services
 
@@ -299,6 +404,7 @@ export class Environment {
    * See https://community.nodemailer.com/2-0-0-beta/setup-smtp/well-known-services/
    */
   @CannotUseWith("SMTP_HOST")
+  @IsInCaseInsensitive(Object.keys(wellKnownServices))
   public SMTP_SERVICE = this.toOptionalString(environment.SMTP_SERVICE);
 
   @Public
@@ -332,7 +438,7 @@ export class Environment {
   /**
    * The email address from which emails are sent.
    */
-  @IsEmail({ allow_display_name: true, allow_ip_domain: true })
+  @IsMailboxAddress()
   @IsOptional()
   public SMTP_FROM_EMAIL = this.toOptionalString(environment.SMTP_FROM_EMAIL);
 
@@ -340,7 +446,7 @@ export class Environment {
    * The reply-to address for emails sent from Outline. If unset the from
    * address is used by default.
    */
-  @IsEmail({ allow_display_name: true, allow_ip_domain: true })
+  @IsMailboxAddress()
   @IsOptional()
   public SMTP_REPLY_EMAIL = this.toOptionalString(environment.SMTP_REPLY_EMAIL);
 
@@ -357,6 +463,17 @@ export class Environment {
    * encrypted connection.
    */
   public SMTP_SECURE = this.toBoolean(environment.SMTP_SECURE ?? "true");
+
+  /**
+   * If true then STARTTLS is disabled even if the server supports it.
+   * If false (the default) then STARTTLS is used if server supports it.
+   *
+   * Setting secure to false therefore does not mean that you would not use an
+   * encrypted connection.
+   */
+  public SMTP_DISABLE_STARTTLS = this.toBoolean(
+    environment.SMTP_DISABLE_STARTTLS ?? "false"
+  );
 
   /**
    * Dropbox app key for embedding Dropbox files
@@ -440,7 +557,7 @@ export class Environment {
   @IsOptional()
   @IsBoolean()
   public RATE_LIMITER_ENABLED = this.toBoolean(
-    environment.RATE_LIMITER_ENABLED ?? "false"
+    environment.RATE_LIMITER_ENABLED ?? "true"
   );
 
   /**
@@ -472,6 +589,20 @@ export class Environment {
   @CannotUseWithout("RATE_LIMITER_ENABLED")
   public RATE_LIMITER_DURATION_WINDOW =
     this.toOptionalNumber(environment.RATE_LIMITER_DURATION_WINDOW) ?? 60;
+
+  /**
+   * Multiplier applied to the per-endpoint API rate limits. Allows operators to
+   * uniformly scale the hard-coded route-level limits up or down without
+   * touching code. A value of 1 (the default) preserves the built-in limits.
+   * Effective per-endpoint limits are scaled by this value, rounded to the
+   * nearest integer, and clamped to a minimum of 1.
+   */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @CannotUseWithout("RATE_LIMITER_ENABLED")
+  public RATE_LIMITER_MULTIPLIER =
+    this.toOptionalFloat(environment.RATE_LIMITER_MULTIPLIER) ?? 1;
 
   /**
    * Set max allowed upload size for file attachments.
@@ -513,6 +644,38 @@ export class Environment {
   @Public
   @IsOptional()
   public AWS_S3_ACCELERATE_URL = environment.AWS_S3_ACCELERATE_URL ?? "";
+
+  /**
+   * Optional CloudFront distribution URL for serving attachment downloads.
+   * Uploads continue to use the S3 endpoint directly. When set together with
+   * AWS_CLOUDFRONT_KEY_PAIR_ID and a private key, signed CloudFront URLs are
+   * used for downloads. If signing credentials are missing, S3 presigned URLs
+   * are used instead.
+   * Example: https://d1a2b3c4d5e6f.cloudfront.net (no trailing slash)
+   */
+  @IsOptional()
+  public AWS_CLOUDFRONT_URL = this.toOptionalString(
+    environment.AWS_CLOUDFRONT_URL
+  );
+
+  /**
+   * CloudFront key pair ID for signed download URLs. Required together with a
+   * private key when AWS_CLOUDFRONT_URL is set.
+   */
+  @IsOptional()
+  public AWS_CLOUDFRONT_KEY_PAIR_ID = this.toOptionalString(
+    environment.AWS_CLOUDFRONT_KEY_PAIR_ID
+  );
+
+  /**
+   * PEM-encoded RSA private key for CloudFront signed URLs, or a base64-encoded
+   * PEM string on a single line. Use a YAML block scalar in docker-compose for
+   * multi-line PEM values.
+   */
+  @IsOptional()
+  public AWS_CLOUDFRONT_PRIVATE_KEY = this.toOptionalString(
+    environment.AWS_CLOUDFRONT_PRIVATE_KEY
+  );
 
   /**
    * Optional AWS S3 endpoint URL for file attachments.
@@ -578,6 +741,13 @@ export class Environment {
     1000000;
 
   /**
+   * Timeout in milliseconds for downloading files from remote locations to file storage.
+   */
+  @IsNumber()
+  public FILE_STORAGE_IMPORT_TIMEOUT =
+    this.toOptionalNumber(environment.FILE_STORAGE_IMPORT_TIMEOUT) ?? 60000;
+
+  /**
    * Set max allowed upload size for imports at workspace level.
    */
   @IsNumber()
@@ -610,6 +780,40 @@ export class Environment {
     this.toOptionalNumber(environment.MAXIMUM_EXPORT_SIZE) ?? os.totalmem();
 
   /**
+   * The number of seconds access tokens issue by the OAuth provider are valid.
+   */
+  @IsNumber()
+  public OAUTH_PROVIDER_ACCESS_TOKEN_LIFETIME =
+    this.toOptionalNumber(environment.OAUTH_PROVIDER_ACCESS_TOKEN_LIFETIME) ??
+    Hour.seconds;
+
+  /**
+   * The number of seconds refresh tokens issue by the OAuth provider are valid.
+   */
+  @IsNumber()
+  public OAUTH_PROVIDER_REFRESH_TOKEN_LIFETIME =
+    this.toOptionalNumber(environment.OAUTH_PROVIDER_REFRESH_TOKEN_LIFETIME) ??
+    30 * Day.seconds;
+
+  /**
+   * The number of seconds authorization codes issue by the OAuth provider are valid.
+   */
+  @IsNumber()
+  public OAUTH_PROVIDER_AUTHORIZATION_CODE_LIFETIME =
+    this.toOptionalNumber(
+      environment.OAUTH_PROVIDER_AUTHORIZATION_CODE_LIFETIME
+    ) ?? 300;
+
+  /**
+   * Whether to disable OAuth Dynamic Client Registration (DCR). When set to
+   * true, the POST /oauth/register endpoint will be unavailable.
+   */
+  @IsBoolean()
+  public OAUTH_DISABLE_DCR = this.toBoolean(
+    environment.OAUTH_DISABLE_DCR ?? "false"
+  );
+
+  /**
    * Enable unsafe-inline in script-src CSP directive
    */
   @IsBoolean()
@@ -618,10 +822,75 @@ export class Environment {
   );
 
   /**
+   * Time window in seconds to analyze webhook failures for disabling decision.
+   * Defaults to 86400 seconds (24 hours).
+   */
+  @IsNumber()
+  @IsOptional()
+  public WEBHOOK_FAILURE_TIME_WINDOW =
+    this.toOptionalNumber(environment.WEBHOOK_FAILURE_TIME_WINDOW) ?? 86400;
+
+  /**
+   * Percentage threshold of failures within the time window that triggers
+   * webhook disabling. Defaults to 80%.
+   */
+  @IsNumber()
+  @IsOptional()
+  public WEBHOOK_FAILURE_RATE_THRESHOLD =
+    this.toOptionalNumber(environment.WEBHOOK_FAILURE_RATE_THRESHOLD) ?? 80;
+
+  /**
+   * Comma-separated list of IP addresses or CIDR ranges that are allowed to be accessed
+   * even if they are private IP addresses. This is useful for allowing
+   * connections to OIDC providers or webhooks on private networks.
+   * Supports both individual IP addresses and CIDR notation.
+   * Example: "10.0.0.1,192.168.1.0/24,172.16.0.1"
+   */
+  @IsOptional()
+  public ALLOWED_PRIVATE_IP_ADDRESSES = this.toOptionalCommaList(
+    environment.ALLOWED_PRIVATE_IP_ADDRESSES
+  );
+
+  /**
+   * The search provider to use. Defaults to "postgres" which uses PostgreSQL
+   * full-text search. Alternative providers can be registered via plugins.
+   */
+  @IsOptional()
+  public SEARCH_PROVIDER =
+    this.toOptionalString(environment.SEARCH_PROVIDER) ?? "postgres";
+
+  /**
    * The product name
    */
   @Public
   public APP_NAME = "Outline";
+
+  /**
+   * Gravity constant for time decay in popularity scoring. Higher values cause
+   * faster decay of older content. Default is 0.7.
+   */
+  @IsOptional()
+  @IsNumber()
+  public POPULARITY_GRAVITY =
+    this.toOptionalNumber(environment.POPULARITY_GRAVITY) ?? 0.7;
+
+  /**
+   * Number of weeks of activity to consider when calculating popularity scores.
+   * Default is 2 weeks.
+   */
+  @IsOptional()
+  @IsNumber()
+  public POPULARITY_ACTIVITY_THRESHOLD_WEEKS =
+    this.toOptionalNumber(environment.POPULARITY_ACTIVITY_THRESHOLD_WEEKS) ?? 2;
+
+  /**
+   * Interval in hours at which popularity scores are recalculated.
+   * Default is 12 hours.
+   */
+  @IsOptional()
+  @IsNumber()
+  public POPULARITY_UPDATE_INTERVAL_HOURS =
+    this.toOptionalNumber(environment.POPULARITY_UPDATE_INTERVAL_HOURS) ?? 12;
 
   /**
    * Returns true if the current installation is the cloud hosted version at
@@ -668,6 +937,10 @@ export class Environment {
     return value ? parseInt(value, 10) : undefined;
   }
 
+  protected toOptionalFloat(value: string | undefined) {
+    return value ? parseFloat(value) : undefined;
+  }
+
   /**
    * Convert a string to a boolean. Supports the following:
    *
@@ -683,7 +956,7 @@ export class Environment {
   protected toBoolean(value: string) {
     try {
       return value ? !!JSON.parse(value) : false;
-    } catch (err) {
+    } catch (_err) {
       throw new Error(
         `"${value}" could not be parsed as a boolean, must be "true" or "false"`
       );
@@ -705,7 +978,7 @@ export class Environment {
   protected toOptionalBoolean(value: string | undefined) {
     try {
       return value ? !!JSON.parse(value) : undefined;
-    } catch (err) {
+    } catch (_err) {
       return undefined;
     }
   }

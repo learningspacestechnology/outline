@@ -6,13 +6,15 @@ import { useTranslation, Trans } from "react-i18next";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import styled from "styled-components";
+import { errToString } from "@shared/utils/error";
 import { UserRole } from "@shared/types";
 import { parseEmail } from "@shared/utils/email";
 import { UserValidation } from "@shared/validations";
 import Button from "~/components/Button";
 import Flex from "~/components/Flex";
 import Input from "~/components/Input";
-import InputSelect from "~/components/InputSelect";
+import type { Option } from "~/components/InputSelect";
+import { InputSelect } from "~/components/InputSelect";
 import { ResizingHeightContainer } from "~/components/ResizingHeightContainer";
 import Text from "~/components/Text";
 import Tooltip from "~/components/Tooltip";
@@ -58,12 +60,14 @@ function Invite({ onSubmit }: Props) {
         onSubmit();
 
         if (response.length > 0) {
-          toast.success(t("We sent out your invites!"));
+          toast.success(
+            t("{{ count }} invites sent", { count: response.length })
+          );
         } else {
           toast.message(t("Those email addresses are already invited"));
         }
       } catch (err) {
-        toast.error(err.message);
+        toast.error(errToString(err));
       } finally {
         setIsSaving(false);
       }
@@ -131,11 +135,12 @@ function Invite({ onSubmit }: Props) {
     </span>
   ) : undefined;
 
-  const options = React.useMemo(() => {
-    const memo = [];
+  const options = React.useMemo<Option[]>(() => {
+    const memo: Option[] = [];
 
     if (user.isAdmin) {
       memo.push({
+        type: "item",
         label: t("Admin"),
         description: t("Can manage all workspace settings"),
         value: UserRole.Admin,
@@ -145,11 +150,13 @@ function Invite({ onSubmit }: Props) {
     return [
       ...memo,
       {
+        type: "item",
         label: t("Editor"),
         description: t("Can create, edit, and delete documents"),
         value: UserRole.Member,
       },
       {
+        type: "item",
         label: t("Viewer"),
         description: t("Can view and comment"),
         value: UserRole.Viewer,
@@ -182,18 +189,17 @@ function Invite({ onSubmit }: Props) {
             {can.update && (
               <Trans>
                 As an admin you can also{" "}
-                <Link to="/settings/security">enable email sign-in</Link>.
+                <Link to="/settings/authentication">enable email sign-in</Link>.
               </Trans>
             )}
           </Text>
         )}
         <Flex gap={12} column>
           <InputSelect
-            label={t("Invite as")}
-            ariaLabel={t("Role")}
             options={options}
             onChange={(r) => setRole(r as UserRole)}
             value={role}
+            label={t("Invite as")}
           />
 
           <ResizingHeightContainer style={{ minHeight: 72, marginBottom: 8 }}>
@@ -209,7 +215,9 @@ function Invite({ onSubmit }: Props) {
                   placeholder={`name@${predictedDomain}`}
                   value={invite.email}
                   required={index === 0}
+                  autoComplete="off"
                   autoFocus
+                  data-1p-ignore
                   flex
                 />
                 <StyledInput
@@ -219,6 +227,8 @@ function Invite({ onSubmit }: Props) {
                   labelHidden={index !== 0}
                   onKeyDown={handleKeyDown}
                   onChange={(ev) => handleChange(ev, index)}
+                  autoComplete="off"
+                  data-1p-ignore
                   value={invite.name}
                   required={!!invite.email}
                   flex

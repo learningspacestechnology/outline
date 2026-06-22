@@ -1,19 +1,21 @@
-/* eslint-disable @typescript-eslint/ban-types */
-import { Location, LocationDescriptor } from "history";
-import { TFunction } from "i18next";
-import {
+import type { Location, LocationDescriptor } from "history";
+import type { TFunction } from "i18next";
+import type {
   JSONValue,
   CollectionPermission,
   DocumentPermission,
+  GroupPermission,
 } from "@shared/types";
-import RootStore from "~/stores/RootStore";
-import { SidebarContextType } from "./components/Sidebar/components/SidebarContext";
-import Document from "./models/Document";
-import FileOperation from "./models/FileOperation";
-import Pin from "./models/Pin";
-import Star from "./models/Star";
-import User from "./models/User";
-import UserMembership from "./models/UserMembership";
+import type RootStore from "~/stores/RootStore";
+import type { SidebarContextType } from "./components/Sidebar/components/SidebarContext";
+import type Model from "./models/base/Model";
+import type Document from "./models/Document";
+import type FileOperation from "./models/FileOperation";
+import type Pin from "./models/Pin";
+import type Star from "./models/Star";
+import type User from "./models/User";
+import type UserMembership from "./models/UserMembership";
+import type Policy from "./models/Policy";
 
 export type PartialExcept<T, K extends keyof T> = Partial<Omit<T, K>> &
   Required<Pick<T, K>>;
@@ -28,6 +30,7 @@ export type MenuItemButton = {
   disabled?: boolean;
   icon?: React.ReactNode;
   tooltip?: React.ReactChild;
+  shortcut?: string[];
 };
 
 export type MenuItemWithChildren = {
@@ -37,7 +40,8 @@ export type MenuItemWithChildren = {
   disabled?: boolean;
   style?: React.CSSProperties;
   hover?: boolean;
-
+  /** Condition to check before preventing the submenu from closing */
+  preventCloseCondition?: () => boolean;
   items: MenuItem[];
   icon?: React.ReactNode;
 };
@@ -61,17 +65,33 @@ export type MenuInternalLink = {
   selected?: boolean;
   disabled?: boolean;
   icon?: React.ReactNode;
+  shortcut?: string[];
 };
 
 export type MenuExternalLink = {
   type: "link";
   title: React.ReactNode;
-  href: string;
+  href: string | { url: string; target?: string };
   visible?: boolean;
   selected?: boolean;
   disabled?: boolean;
   level?: number;
   icon?: React.ReactNode;
+  shortcut?: string[];
+};
+
+export type MenuGroup = {
+  type: "group";
+  title: React.ReactNode;
+  visible?: boolean;
+  icon?: React.ReactNode; // added for backward compatibility
+  items: MenuItem[];
+};
+
+export type MenuCustomContent = {
+  type: "custom";
+  visible?: boolean;
+  content: React.ReactNode;
 };
 
 export type MenuItem =
@@ -80,15 +100,33 @@ export type MenuItem =
   | MenuExternalLink
   | MenuItemWithChildren
   | MenuSeparator
-  | MenuHeading;
+  | MenuHeading
+  | MenuGroup
+  | MenuCustomContent;
 
 export type ActionContext = {
-  isContextMenu: boolean;
+  isMenu: boolean;
   isCommandBar: boolean;
   isButton: boolean;
   sidebarContext?: SidebarContextType;
+
+  // Legacy (backward compatibility) - returns primary active model's ID
   activeCollectionId?: string | undefined;
   activeDocumentId: string | undefined;
+
+  // New API - work directly with Model instances
+  getActiveModels: <T extends Model>(
+    modelClass: new (...args: never[]) => T
+  ) => T[];
+  getActiveModel: <T extends Model>(
+    modelClass: new (...args: never[]) => T
+  ) => T | undefined;
+  getActivePolicies: <T extends Model>(
+    modelClass: new (...args: never[]) => T
+  ) => Policy[];
+  isModelActive: (model: Model) => boolean;
+  activeModels: ReadonlySet<Model>;
+
   currentUserId: string | undefined;
   currentTeamId: string | undefined;
   location: Location;
@@ -97,28 +135,70 @@ export type ActionContext = {
   t: TFunction;
 };
 
-export type Action = {
-  type?: undefined;
+type BaseAction = {
+  type: "action";
   id: string;
   analyticsName?: string;
-  name: ((context: ActionContext) => string) | string;
+  name: ((context: ActionContext) => React.ReactNode) | React.ReactNode;
   section: ((context: ActionContext) => string) | string;
+  description?: ((context: ActionContext) => string) | string;
   shortcut?: string[];
   keywords?: string;
-  dangerous?: boolean;
   /** Higher number is higher in results, default is 0. */
   priority?: number;
+  icon?: ((context: ActionContext) => React.ReactNode) | React.ReactNode;
   iconInContextMenu?: boolean;
-  icon?: React.ReactNode;
   placeholder?: ((context: ActionContext) => string) | string;
-  selected?: (context: ActionContext) => boolean;
-  visible?: (context: ActionContext) => boolean;
-  /**
-   * Perform the action – note this should generally not be called directly, use `performAction`
-   * instead. Errors will be caught and displayed to the user as a toast message.
-   */
-  perform?: (context: ActionContext) => any;
-  children?: ((context: ActionContext) => Action[]) | Action[];
+  selected?: ((context: ActionContext) => boolean) | boolean;
+  visible?: ((context: ActionContext) => boolean) | boolean;
+  disabled?: ((context: ActionContext) => boolean) | boolean;
+};
+
+export type Action = BaseAction & {
+  variant: "action";
+  dangerous?: boolean;
+  tooltip?:
+    | ((context: ActionContext) => React.ReactChild | undefined)
+    | React.ReactChild;
+  perform: (context: ActionContext) => unknown;
+};
+
+export type InternalLinkAction = BaseAction & {
+  variant: "internal_link";
+  to: ((context: ActionContext) => LocationDescriptor) | LocationDescriptor;
+};
+
+export type ExternalLinkAction = BaseAction & {
+  variant: "external_link";
+  url: string;
+  target?: string;
+};
+
+export type ActionWithChildren = BaseAction & {
+  variant: "action_with_children";
+  children:
+    | ((
+        context: ActionContext
+      ) => (ActionVariant | ActionGroup | ActionSeparator)[])
+    | (ActionVariant | ActionGroup | ActionSeparator)[];
+};
+
+export type ActionVariant =
+  | Action
+  | InternalLinkAction
+  | ExternalLinkAction
+  | ActionWithChildren;
+
+// Specific to menu
+export type ActionGroup = {
+  type: "action_group";
+  name: string;
+  actions: (ActionVariant | ActionSeparator)[];
+};
+
+// Specific to menu
+export type ActionSeparator = {
+  type: "action_separator";
 };
 
 export type CommandBarAction = {
@@ -177,10 +257,10 @@ export type WebsocketEntityDeletedEvent = {
 };
 
 export type WebsocketEntitiesEvent = {
-  fetchIfMissing?: boolean;
   documentIds: { id: string; updatedAt?: string }[];
   collectionIds: { id: string; updatedAt?: string }[];
   groupIds: { id: string; updatedAt?: string }[];
+  invalidatedPolicies: string[];
   teamIds: string[];
   event: string;
 };
@@ -237,7 +317,11 @@ export const EmptySelectValue = "__empty__";
 
 export type Permission = {
   label: string;
-  value: CollectionPermission | DocumentPermission | typeof EmptySelectValue;
+  value:
+    | CollectionPermission
+    | DocumentPermission
+    | GroupPermission
+    | typeof EmptySelectValue;
   divider?: boolean;
 };
 

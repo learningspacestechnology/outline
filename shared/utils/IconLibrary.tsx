@@ -7,6 +7,16 @@ import {
   faWebAwesome,
   faXTwitter,
   faBluesky,
+  faGithub,
+  faGitlab,
+  faDiscord,
+  faDocker,
+  faCodepen,
+  faDropbox,
+  faPaypal,
+  faShopify,
+  faSwift,
+  faSlack,
 } from "@fortawesome/free-brands-svg-icons";
 import {
   faBagShopping,
@@ -99,9 +109,15 @@ import {
   faHandsClapping,
   faFolderClosed,
   faFlaskVial,
+  faCircle,
+  faSquare,
+  faPentagon,
+  faHexagon,
+  faDiamond,
+  faSpiral,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import intersection from "lodash/intersection";
+import { intersection } from "es-toolkit/compat";
 import {
   BookmarkedIcon,
   BicycleIcon,
@@ -551,6 +567,22 @@ export class IconLibrary {
         faPython,
         faXTwitter,
         faBluesky,
+        faGithub,
+        faGitlab,
+        faDiscord,
+        faDocker,
+        faCodepen,
+        faDropbox,
+        faPaypal,
+        faShopify,
+        faSwift,
+        faSlack,
+        faCircle,
+        faSquare,
+        faPentagon,
+        faHexagon,
+        faDiamond,
+        faSpiral,
       ].map((icon) => [
         icon.iconName,
         {

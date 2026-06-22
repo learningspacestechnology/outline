@@ -1,13 +1,55 @@
 import passport from "@outlinewiki/koa-passport";
-import { Context } from "koa";
-import { InternalOAuthError } from "passport-oauth2";
+import type { Context } from "koa";
+import {
+  AuthorizationError,
+  InternalOAuthError,
+  TokenError,
+} from "passport-oauth2";
 import { Client } from "@shared/types";
+import { parseDomain } from "@shared/utils/domains";
 import env from "@server/env";
-import { AuthenticationError, OAuthStateMismatchError } from "@server/errors";
+import { AuthenticationError } from "@server/errors";
 import Logger from "@server/logging/Logger";
-import { AuthenticationResult } from "@server/types";
+import { Team } from "@server/models";
+import type { AuthenticationResult } from "@server/types";
 import { signIn } from "@server/utils/authentication";
 import { parseState } from "@server/utils/passport";
+
+/**
+ * Validates that a host from the OAuth state is a trusted domain. For
+ * cloud-hosted deployments, ensures the host is either a known subdomain of
+ * the base domain or a registered custom domain.
+ *
+ * @param host the host to validate.
+ * @returns the host if trusted, otherwise falls back to the base domain from env.URL.
+ */
+async function getValidatedHost(host: string): Promise<string> {
+  const fallback = new URL(env.URL).host;
+
+  if (!env.isCloudHosted) {
+    return host;
+  }
+
+  if (!host) {
+    return fallback;
+  }
+
+  const domain = parseDomain(host);
+
+  // Subdomains of the base domain are trusted
+  if (!domain.custom) {
+    return domain.host;
+  }
+
+  // Custom domains must be registered to a team
+  const team = await Team.findByDomain(domain.host);
+  if (team) {
+    return domain.host;
+  }
+
+  // Unrecognized host, fall back to the base app URL
+  return fallback;
+}
 
 export default function createMiddleware(providerName: string) {
   return function passportMiddleware(ctx: Context) {
@@ -18,10 +60,20 @@ export default function createMiddleware(providerName: string) {
       },
       async (err, user, result: AuthenticationResult) => {
         if (err) {
-          Logger.error(
-            "Error during authentication",
-            err instanceof InternalOAuthError ? err.oauthError : err
-          );
+          // TokenError / AuthorizationError surface input problems reported by
+          // the upstream OAuth provider (expired or already-redeemed codes,
+          // access_denied, etc). They are not server bugs, so log at warn
+          // level and skip the error reporter.
+          if (err instanceof TokenError || err instanceof AuthorizationError) {
+            Logger.warn(`OAuth error during authentication: ${err.message}`, {
+              code: err.code,
+            });
+          } else {
+            Logger.error(
+              "Error during authentication",
+              err instanceof InternalOAuthError ? err.oauthError : err
+            );
+          }
 
           if (err.id) {
             const notice = err.id.replace(/_/g, "-");
@@ -33,18 +85,18 @@ export default function createMiddleware(providerName: string) {
             // same domain or subdomain that they originated from (found in state).
 
             // get original host
-            const stateString = ctx.cookies.get("state");
+            const stateString =
+              typeof ctx.query.state === "string" ? ctx.query.state : undefined;
             const state = stateString ? parseState(stateString) : undefined;
+            const oauthState = ctx.state.oauthState ?? state;
 
             // form a URL object with the err.redirectPath and replace the host
             const reqProtocol =
-              state?.client === Client.Desktop ? "outline" : ctx.protocol;
+              oauthState?.client === Client.Desktop ? "outline" : ctx.protocol;
 
-            // `state.host` cannot be trusted if the error is a state mismatch, use `ctx.hostname`
-            const requestHost =
-              err instanceof OAuthStateMismatchError
-                ? ctx.hostname
-                : state?.host ?? ctx.hostname;
+            const requestHost = await getValidatedHost(
+              oauthState?.host ?? ctx.hostname
+            );
             const url = new URL(
               env.isCloudHosted
                 ? `${reqProtocol}://${requestHost}${redirectPath}`

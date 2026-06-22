@@ -2,16 +2,18 @@ import Router from "koa-router";
 import { Sequelize, Op, Transaction } from "sequelize";
 import pinCreator from "@server/commands/pinCreator";
 import auth from "@server/middlewares/authentication";
+import { rateLimiter } from "@server/middlewares/rateLimiter";
 import { transaction } from "@server/middlewares/transaction";
 import validate from "@server/middlewares/validate";
 import { Collection, Document, Pin } from "@server/models";
 import { authorize } from "@server/policies";
 import {
   presentPin,
-  presentDocument,
+  presentDocuments,
   presentPolicies,
 } from "@server/presenters";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
+import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
 
@@ -19,6 +21,7 @@ const router = new Router();
 
 router.post(
   "pins.create",
+  rateLimiter(RateLimiterStrategy.TwentyFivePerMinute),
   auth(),
   validate(T.PinsCreateSchema),
   transaction(),
@@ -33,9 +36,10 @@ router.post(
     authorize(user, "read", document);
 
     if (collectionId) {
-      const collection = await Collection.scope({
-        method: ["withMembership", user.id],
-      }).findByPk(collectionId, { transaction });
+      const collection = await Collection.findByPk(collectionId, {
+        userId: user.id,
+        transaction,
+      });
       authorize(user, "update", collection);
       authorize(user, "pin", document);
     } else {
@@ -76,8 +80,12 @@ router.post(
         createdById: user.id,
         teamId: user.teamId,
       },
-      rejectOnEmpty: true,
     });
+
+    if (!pin) {
+      ctx.response.status = 204;
+      return;
+    }
 
     ctx.body = {
       data: presentPin(pin),
@@ -94,6 +102,13 @@ router.post(
   async (ctx: APIContext<T.PinsListReq>) => {
     const { collectionId } = ctx.input.body;
     const { user } = ctx.state.auth;
+
+    if (collectionId) {
+      const collection = await Collection.findByPk(collectionId, {
+        userId: user.id,
+      });
+      authorize(user, "read", collection);
+    }
 
     const [pins, collectionIds] = await Promise.all([
       Pin.findAll({
@@ -113,7 +128,7 @@ router.post(
       user.collectionIds(),
     ]);
 
-    const documents = await Document.defaultScopeWithUser(user.id).findAll({
+    const documents = await Document.withMembershipScope(user.id).findAll({
       where: {
         id: pins.map((pin) => pin.documentId),
         collectionId: collectionIds,
@@ -126,9 +141,7 @@ router.post(
       pagination: ctx.state.pagination,
       data: {
         pins: pins.map(presentPin),
-        documents: await Promise.all(
-          documents.map((document: Document) => presentDocument(ctx, document))
-        ),
+        documents: await presentDocuments(ctx, documents),
       },
       policies,
     };

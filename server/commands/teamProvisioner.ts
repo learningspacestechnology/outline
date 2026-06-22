@@ -1,13 +1,16 @@
 import teamCreator from "@server/commands/teamCreator";
+import { createContext } from "@server/context";
 import env from "@server/env";
 import {
   DomainNotAllowedError,
   InvalidAuthenticationError,
   TeamPendingDeletionError,
 } from "@server/errors";
+import Logger from "@server/logging/Logger";
 import { traceFunction } from "@server/logging/tracing";
 import { Team, AuthenticationProvider } from "@server/models";
 import { sequelize } from "@server/storage/database";
+import type { APIContext } from "@server/types";
 
 type TeamProvisionerResult = {
   team: Team;
@@ -36,41 +39,54 @@ type Props = {
     /** External identifier of the authentication provider */
     providerId: string;
   };
-  /** The IP address of the incoming request */
-  ip: string;
 };
 
-async function teamProvisioner({
-  teamId,
-  name,
-  domain,
-  subdomain,
-  avatarUrl,
-  authenticationProvider,
-  ip,
-}: Props): Promise<TeamProvisionerResult> {
+async function teamProvisioner(
+  ctx: APIContext,
+  { teamId, name, domain, subdomain, avatarUrl, authenticationProvider }: Props
+): Promise<TeamProvisionerResult> {
+  const where = teamId
+    ? { ...authenticationProvider, teamId }
+    : authenticationProvider;
+
+  // First try to find an authentication provider associated with a non-deleted
+  // team. This ensures active workspaces are always preferred over deleted ones
+  // when multiple workspaces share the same authentication provider.
   let authP = await AuthenticationProvider.findOne({
-    where: teamId
-      ? { ...authenticationProvider, teamId }
-      : authenticationProvider,
+    where,
     include: [
       {
         model: Team,
         as: "team",
         required: true,
-        paranoid: false,
       },
     ],
     order: [["enabled", "DESC"]],
   });
 
+  if (!authP) {
+    // Check if there is a matching authentication provider for a deleted team.
+    // If so, throw an appropriate error rather than creating a new team.
+    authP = await AuthenticationProvider.findOne({
+      where,
+      include: [
+        {
+          model: Team,
+          as: "team",
+          required: true,
+          paranoid: false,
+        },
+      ],
+    });
+
+    if (authP?.team.deletedAt) {
+      throw TeamPendingDeletionError();
+    }
+  }
+
   // This authentication provider already exists which means we have a team and
   // there is nothing left to do but return the existing credentials
   if (authP) {
-    if (authP.team.deletedAt) {
-      throw TeamPendingDeletionError();
-    }
-
     return {
       authenticationProvider: authP,
       team: authP.team,
@@ -79,11 +95,16 @@ async function teamProvisioner({
   } else if (teamId) {
     // The user is attempting to log into a team with an unfamiliar SSO provider
     if (env.isCloudHosted) {
-      throw InvalidAuthenticationError();
+      const err = InvalidAuthenticationError();
+      Logger.error("Authentication provider does not exist for team", err, {
+        authenticationProvider,
+        teamId,
+      });
+      throw err;
     }
 
     // This team + auth provider combination has not been seen before in self hosted
-    const team = await Team.findByPk(teamId, {
+    const existingTeam = await Team.findByPk(teamId, {
       rejectOnEmpty: true,
     });
 
@@ -91,14 +112,14 @@ async function teamProvisioner({
     // new team is allowed then assign the authentication provider to the
     // existing team
     if (domain) {
-      if (await team.isDomainAllowed(domain)) {
-        authP = await team.$create<AuthenticationProvider>(
+      if (await existingTeam.isDomainAllowed(domain)) {
+        authP = await existingTeam.$create<AuthenticationProvider>(
           "authenticationProvider",
           authenticationProvider
         );
         return {
           authenticationProvider: authP,
-          team,
+          team: existingTeam,
           isNewTeam: false,
         };
       }
@@ -109,14 +130,12 @@ async function teamProvisioner({
 
   // We cannot find an existing team, so we create a new one
   const team = await sequelize.transaction((transaction) =>
-    teamCreator({
+    teamCreator(createContext({ transaction }), {
       name,
       domain,
       subdomain,
       avatarUrl,
       authenticationProviders: [authenticationProvider],
-      ip,
-      transaction,
     })
   );
 

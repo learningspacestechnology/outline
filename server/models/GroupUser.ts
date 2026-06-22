@@ -1,6 +1,5 @@
-import { InferAttributes, InferCreationAttributes } from "sequelize";
+import type { InferAttributes, InferCreationAttributes } from "sequelize";
 import {
-  DefaultScope,
   BelongsTo,
   ForeignKey,
   Column,
@@ -8,18 +7,12 @@ import {
   DataType,
   Scopes,
 } from "sequelize-typescript";
+import { GroupPermission } from "@shared/types";
 import Group from "./Group";
 import User from "./User";
 import Model from "./base/Model";
 import Fix from "./decorators/Fix";
 
-@DefaultScope(() => ({
-  include: [
-    {
-      association: "user",
-    },
-  ],
-}))
 @Scopes(() => ({
   withGroup: {
     include: [
@@ -64,6 +57,9 @@ class GroupUser extends Model<
   @ForeignKey(() => User)
   @Column(DataType.UUID)
   createdById: string;
+
+  @Column(DataType.ENUM(...Object.values(GroupPermission)))
+  permission: GroupPermission;
 
   get modelId() {
     return this.groupId;

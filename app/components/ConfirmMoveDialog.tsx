@@ -1,8 +1,9 @@
 import { observer } from "mobx-react";
-import * as React from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { CollectionPermission, NavigationNode } from "@shared/types";
+import { errToString } from "@shared/utils/error";
+import type { NavigationNode } from "@shared/types";
+import { CollectionPermission } from "@shared/types";
 import type Collection from "~/models/Collection";
 import ConfirmationDialog from "~/components/ConfirmationDialog";
 import useStores from "~/hooks/useStores";
@@ -50,7 +51,7 @@ function ConfirmMoveDialog({ collection, item, ...rest }: Props) {
           )
         );
       } else {
-        toast.error(err.message);
+        toast.error(errToString(err));
       }
     } finally {
       dialogs.closeAllModals();

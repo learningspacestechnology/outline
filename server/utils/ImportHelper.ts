@@ -1,4 +1,4 @@
-import path from "path";
+import path from "node:path";
 import fs from "fs-extra";
 import { deserializeFilename } from "./fs";
 
@@ -31,13 +31,14 @@ export default class ImportHelper {
     };
     let stats;
 
-    if ([".git", ".DS_Store", "__MACOSX"].includes(name)) {
+    // Ignore macOS metadata directories and hidden files
+    if (name === "__MACOSX" || name.startsWith(".")) {
       return null;
     }
 
     try {
       stats = await fs.stat(filePath);
-    } catch (e) {
+    } catch (_err) {
       return null;
     }
 

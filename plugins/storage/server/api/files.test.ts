@@ -1,12 +1,13 @@
-import { existsSync, copyFileSync } from "fs";
-import { readFile } from "fs/promises";
-import path from "path";
+import { existsSync, copyFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import FormData from "form-data";
 import { ensureDirSync } from "fs-extra";
-import { v4 as uuidV4 } from "uuid";
 import { FileOperationState, FileOperationType } from "@shared/types";
 import env from "@server/env";
-import { Buckets } from "@server/models/helpers/AttachmentHelper";
+import AttachmentHelper, {
+  Buckets,
+} from "@server/models/helpers/AttachmentHelper";
 import FileStorage from "@server/storage/files";
 import {
   buildAttachment,
@@ -14,18 +15,18 @@ import {
   buildUser,
 } from "@server/test/factories";
 import { getTestServer } from "@server/test/support";
+import { randomUUID } from "node:crypto";
 
 const server = getTestServer();
 
 // Increase timeout for all tests in this file
-jest.setTimeout(10000);
+vi.setConfig({ testTimeout: 10000 });
 
 describe("#files.create", () => {
   it("should fail with status 400 bad request if key is invalid", async () => {
     const user = await buildUser();
-    const res = await server.post("/api/files.create", {
+    const res = await server.post("/api/files.create", user, {
       body: {
-        token: user.getJwtToken(),
         key: "public/foo/bar/baz.png",
       },
     });
@@ -50,7 +51,7 @@ describe("#files.create", () => {
     const form = new FormData();
     form.append("key", attachment.key);
     form.append("file", content, fileName);
-    form.append("token", user.getJwtToken());
+    form.append("token", user.getSessionToken());
 
     const res = await server.post(`/api/files.create`, {
       headers: form.getHeaders(),
@@ -87,13 +88,77 @@ describe("#files.create", () => {
     const form = new FormData();
     form.append("key", attachment.key);
     form.append("file", content, fileName);
-    form.append("token", user.getJwtToken());
+    form.append("token", user.getSessionToken());
 
     const res = await server.post(`/api/files.create`, {
       headers: form.getHeaders(),
       body: form,
     });
     expect(res.status).toEqual(400);
+  });
+
+  it("should fail with status 400 if uploaded file exceeds declared size", async () => {
+    const user = await buildUser();
+    const fileName = "images.docx";
+    const attachment = await buildAttachment(
+      {
+        teamId: user.teamId,
+        userId: user.id,
+        size: 100,
+        contentType:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      },
+      fileName
+    );
+
+    const content = await readFile(
+      path.resolve(__dirname, "..", "test", "fixtures", fileName)
+    );
+    const form = new FormData();
+    form.append("key", attachment.key);
+    form.append("file", content, fileName);
+    form.append("token", user.getSessionToken());
+
+    const res = await server.post(`/api/files.create`, {
+      headers: form.getHeaders(),
+      body: form,
+    });
+    expect(res.status).toEqual(400);
+    expect(
+      existsSync(path.join(env.FILE_STORAGE_LOCAL_ROOT_DIR, attachment.key))
+    ).toBe(false);
+  });
+
+  it("should update attachment size to actual uploaded bytes", async () => {
+    const user = await buildUser();
+    const fileName = "images.docx";
+    const attachment = await buildAttachment(
+      {
+        teamId: user.teamId,
+        userId: user.id,
+        size: 1_000_000,
+        contentType:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      },
+      fileName
+    );
+
+    const content = await readFile(
+      path.resolve(__dirname, "..", "test", "fixtures", fileName)
+    );
+    const form = new FormData();
+    form.append("key", attachment.key);
+    form.append("file", content, fileName);
+    form.append("token", user.getSessionToken());
+
+    const res = await server.post(`/api/files.create`, {
+      headers: form.getHeaders(),
+      body: form,
+    });
+    expect(res.status).toEqual(200);
+
+    await attachment.reload();
+    expect(Number(attachment.size)).toEqual(content.byteLength);
   });
 
   it("should succeed with status 200 ok and create a file", async () => {
@@ -115,7 +180,7 @@ describe("#files.create", () => {
     const form = new FormData();
     form.append("key", attachment.key);
     form.append("file", content, fileName);
-    form.append("token", user.getJwtToken());
+    form.append("token", user.getSessionToken());
 
     const res = await server.post(`/api/files.create`, {
       headers: form.getHeaders(),
@@ -135,7 +200,7 @@ describe("#files.get", () => {
   it("should fail with status 404 if existing file is requested with key", async () => {
     const user = await buildUser();
     const fileName = "images.docx";
-    const key = path.join("uploads", user.id, uuidV4(), fileName);
+    const key = path.join("uploads", user.id, crypto.randomUUID(), fileName);
 
     ensureDirSync(
       path.dirname(path.join(env.FILE_STORAGE_LOCAL_ROOT_DIR, key))
@@ -153,7 +218,7 @@ describe("#files.get", () => {
   it("should fail with status 404 if non-existing file is requested with key", async () => {
     const user = await buildUser();
     const fileName = "images.docx";
-    const key = path.join("uploads", user.id, uuidV4(), fileName);
+    const key = path.join("uploads", user.id, crypto.randomUUID(), fileName);
     const res = await server.get(`/api/files.get?key=${key}`);
     expect(res.status).toEqual(404);
   });
@@ -176,6 +241,12 @@ describe("#files.get", () => {
 
     const attachment = await buildAttachment(
       {
+        acl: "public-read",
+        key: AttachmentHelper.getKey({
+          id: randomUUID(),
+          name: fileName,
+          userId: user.id,
+        }).replace(Buckets.uploads, Buckets.public),
         teamId: user.teamId,
         userId: user.id,
         contentType:
@@ -190,7 +261,7 @@ describe("#files.get", () => {
     const form = new FormData();
     form.append("key", attachment.key);
     form.append("file", content, fileName);
-    form.append("token", user.getJwtToken());
+    form.append("token", user.getSessionToken());
 
     await server.post(`/api/files.create`, {
       headers: form.getHeaders(),
@@ -226,7 +297,7 @@ describe("#files.get", () => {
     const form = new FormData();
     form.append("key", attachment.key);
     form.append("file", content, fileName);
-    form.append("token", user.getJwtToken());
+    form.append("token", user.getSessionToken());
 
     await server.post(`/api/files.create`, {
       headers: form.getHeaders(),
@@ -279,7 +350,36 @@ describe("#files.get", () => {
 
   it("should succeed with status 200 ok when avatar is requested using key", async () => {
     const user = await buildUser();
-    const key = path.join("avatars", user.id, uuidV4());
+    const key = path.join("avatars", user.id, crypto.randomUUID());
+    const attachment = await buildAttachment({
+      key,
+      teamId: user.teamId,
+      userId: user.id,
+      contentType: "image/jpg",
+      acl: "public-read",
+    });
+
+    await attachment.destroy({
+      hooks: false,
+    });
+
+    ensureDirSync(
+      path.dirname(path.join(env.FILE_STORAGE_LOCAL_ROOT_DIR, key))
+    );
+
+    copyFileSync(
+      path.resolve(__dirname, "..", "test", "fixtures", "avatar.jpg"),
+      path.join(env.FILE_STORAGE_LOCAL_ROOT_DIR, key)
+    );
+
+    const res = await server.get(`/api/files.get?key=${key}`);
+    expect(res.status).toEqual(200);
+    expect(res.headers.get("Content-Disposition")).toEqual("attachment");
+  });
+
+  it("should succeed with status 200 ok when avatar is requested using key", async () => {
+    const user = await buildUser();
+    const key = path.join("avatars", user.id, crypto.randomUUID());
     await buildAttachment({
       key,
       teamId: user.teamId,
@@ -303,10 +403,79 @@ describe("#files.get", () => {
     expect(res.headers.get("Content-Disposition")).toEqual("attachment");
   });
 
+  it("should succeed with status 200 ok when public-read avatar in uploads bucket is requested by non-owner", async () => {
+    const owner = await buildUser();
+    const otherUser = await buildUser({ teamId: owner.teamId });
+    const key = AttachmentHelper.getKey({
+      id: randomUUID(),
+      name: "avatar.jpg",
+      userId: owner.id,
+    });
+    await buildAttachment({
+      key,
+      teamId: owner.teamId,
+      userId: owner.id,
+      contentType: "image/jpg",
+      acl: "public-read",
+    });
+
+    ensureDirSync(
+      path.dirname(path.join(env.FILE_STORAGE_LOCAL_ROOT_DIR, key))
+    );
+
+    copyFileSync(
+      path.resolve(__dirname, "..", "test", "fixtures", "avatar.jpg"),
+      path.join(env.FILE_STORAGE_LOCAL_ROOT_DIR, key)
+    );
+
+    // Non-owner user should be able to access public-read attachment
+    const res = await server.get(`/api/files.get?key=${key}`, {
+      headers: {
+        Authorization: `Bearer ${otherUser.getSessionToken()}`,
+      },
+    });
+    expect(res.status).toEqual(200);
+    expect(res.headers.get("Content-Type")).toEqual("image/jpg");
+  });
+
+  it("should fail with status 403 when private attachment in uploads bucket is requested by non-owner", async () => {
+    const owner = await buildUser();
+    const otherUser = await buildUser({ teamId: owner.teamId });
+    const key = AttachmentHelper.getKey({
+      id: randomUUID(),
+      name: "document.pdf",
+      userId: owner.id,
+    });
+    await buildAttachment({
+      key,
+      teamId: owner.teamId,
+      userId: owner.id,
+      contentType: "application/pdf",
+      acl: "private",
+    });
+
+    ensureDirSync(
+      path.dirname(path.join(env.FILE_STORAGE_LOCAL_ROOT_DIR, key))
+    );
+
+    copyFileSync(
+      path.resolve(__dirname, "..", "test", "fixtures", "avatar.jpg"),
+      path.join(env.FILE_STORAGE_LOCAL_ROOT_DIR, key)
+    );
+
+    // Non-owner user should NOT be able to access private attachment
+    const res = await server.get(`/api/files.get?key=${key}`, {
+      headers: {
+        Authorization: `Bearer ${otherUser.getSessionToken()}`,
+      },
+    });
+    expect(res.status).toEqual(403);
+  });
+
   it("should succeed with status 200 ok when exported file is requested using signature", async () => {
     const user = await buildUser();
     const fileName = "export-markdown.zip";
-    const key = `${Buckets.uploads}/${user.teamId}/${uuidV4()}/${fileName}`;
+    const key = `${Buckets.uploads}/${user.teamId}/${crypto.randomUUID()}/${fileName}`;
 
     await buildFileOperation({
       userId: user.id,

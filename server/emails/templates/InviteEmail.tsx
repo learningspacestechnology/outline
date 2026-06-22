@@ -1,7 +1,8 @@
 import * as React from "react";
 import env from "@server/env";
 import { can } from "@server/policies";
-import BaseEmail, { EmailMessageCategory, EmailProps } from "./BaseEmail";
+import type { EmailProps } from "./BaseEmail";
+import BaseEmail, { EmailMessageCategory } from "./BaseEmail";
 import Body from "./components/Body";
 import Button from "./components/Button";
 import EmailTemplate from "./components/EmailLayout";
@@ -21,17 +22,28 @@ type Props = EmailProps & {
 /**
  * Email sent to an external user when an admin sends them an invite.
  */
-export default class InviteEmail extends BaseEmail<Props, Record<string, any>> {
+export default class InviteEmail extends BaseEmail<Props, void> {
   protected get category() {
     return EmailMessageCategory.Invitation;
   }
 
   protected subject({ actorName, teamName }: Props) {
-    return `${actorName} invited you to join ${teamName}’s workspace`;
+    return this.t(
+      "{{ actorName }} invited you to join {{ teamName }}’s workspace",
+      {
+        actorName,
+        teamName,
+      }
+    );
   }
 
   protected preview() {
-    return `${env.APP_NAME} is a place for your team to build and share knowledge.`;
+    return this.t(
+      "{{ appName }} is a place for your team to build and share knowledge.",
+      {
+        appName: env.APP_NAME,
+      }
+    );
   }
 
   protected replyTo({ notification }: Props) {
@@ -50,13 +62,11 @@ export default class InviteEmail extends BaseEmail<Props, Record<string, any>> {
     teamUrl,
   }: Props): string {
     return `
-Join ${teamName} on ${env.APP_NAME}
+${this.t("Join {{ teamName }} on {{ appName }}", { teamName, appName: env.APP_NAME })}
 
-${actorName} ${actorEmail ? `(${actorEmail})` : ""} has invited you to join ${
-      env.APP_NAME
-    }, a place for your team to build and share knowledge.
+${actorName} ${actorEmail ? `(${actorEmail})` : ""} ${this.t("has invited you to join {{ appName }}, a place for your team to build and share knowledge.", { appName: env.APP_NAME })}
 
-Join now: ${teamUrl}
+${this.t("Join now")}: ${teamUrl}
 `;
   }
 
@@ -69,16 +79,21 @@ Join now: ${teamUrl}
 
         <Body>
           <Heading>
-            Join {teamName} on {env.APP_NAME}
+            {this.t("Join {{ teamName }} on {{ appName }}", {
+              teamName,
+              appName: env.APP_NAME,
+            })}
           </Heading>
           <p>
-            {actorName} {actorEmail ? `(${actorEmail})` : ""} has invited you to
-            join {env.APP_NAME}, a place for your team to build and share
-            knowledge.
+            {actorName} {actorEmail ? `(${actorEmail})` : ""}{" "}
+            {this.t(
+              "has invited you to join {{ appName }}, a place for your team to build and share knowledge.",
+              { appName: env.APP_NAME }
+            )}
           </p>
           <EmptySpace height={10} />
           <p>
-            <Button href={inviteLink}>Join now</Button>
+            <Button href={inviteLink}>{this.t("Join now")}</Button>
           </p>
         </Body>
 

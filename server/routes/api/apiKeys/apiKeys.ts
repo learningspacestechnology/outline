@@ -1,21 +1,29 @@
 import Router from "koa-router";
-import { WhereOptions } from "sequelize";
-import { UserRole } from "@shared/types";
+import { Op, Sequelize, type WhereOptions } from "sequelize";
+import { Scope } from "@shared/types";
 import auth from "@server/middlewares/authentication";
+import { rateLimiter } from "@server/middlewares/rateLimiter";
 import { transaction } from "@server/middlewares/transaction";
 import validate from "@server/middlewares/validate";
 import { ApiKey, User } from "@server/models";
 import { authorize, cannot } from "@server/policies";
 import { presentApiKey } from "@server/presenters";
-import { APIContext, AuthenticationType } from "@server/types";
+import type { APIContext } from "@server/types";
+import { AuthenticationType } from "@server/types";
+import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
 
 const router = new Router();
 
+const globalScopes = new Set<string>(Object.values(Scope));
+
 router.post(
   "apiKeys.create",
-  auth({ role: UserRole.Member, type: AuthenticationType.APP }),
+  rateLimiter(RateLimiterStrategy.TwentyFivePerMinute),
+  auth({
+    type: AuthenticationType.APP,
+  }),
   validate(T.APIKeysCreateSchema),
   transaction(),
   async (ctx: APIContext<T.APIKeysCreateReq>) => {
@@ -28,8 +36,14 @@ router.post(
       name,
       userId: user.id,
       expiresAt,
-      scope: scope?.map((s) => (s.startsWith("/api/") ? s : `/api/${s}`)),
+      scope: scope?.map((s) =>
+        s.startsWith("/api/") || s.includes(":") || globalScopes.has(s)
+          ? s
+          : `/api/${s.replace(/^\//, "")}`
+      ),
     });
+
+    apiKey.user = user;
 
     ctx.body = {
       data: presentApiKey(apiKey),
@@ -39,21 +53,21 @@ router.post(
 
 router.post(
   "apiKeys.list",
-  auth({ role: UserRole.Member }),
+  auth(),
   pagination(),
   validate(T.APIKeysListSchema),
   async (ctx: APIContext<T.APIKeysListReq>) => {
-    const { userId } = ctx.input.body;
+    const { userId, query, sort, direction } = ctx.input.body;
     const { pagination } = ctx.state;
     const actor = ctx.state.auth.user;
 
-    let where: WhereOptions<User> = {
+    let userWhere: WhereOptions<User> = {
       teamId: actor.teamId,
     };
 
     if (cannot(actor, "listApiKeys", actor.team)) {
-      where = {
-        ...where,
+      userWhere = {
+        ...userWhere,
         id: actor.id,
       };
     }
@@ -62,21 +76,38 @@ router.post(
       const user = await User.findByPk(userId);
       authorize(actor, "listApiKeys", user);
 
-      where = {
-        ...where,
+      userWhere = {
+        ...userWhere,
         id: userId,
       };
     }
 
+    let where: WhereOptions<ApiKey> = {};
+
+    if (query) {
+      where = {
+        ...where,
+        [Op.and]: [
+          Sequelize.literal(
+            `unaccent(LOWER("apiKey"."name")) like unaccent(LOWER(:query))`
+          ),
+        ],
+      };
+    }
+
+    const replacements = { query: `%${query}%` };
+
     const apiKeys = await ApiKey.findAll({
+      where,
+      replacements,
       include: [
         {
           model: User,
           required: true,
-          where,
+          where: userWhere,
         },
       ],
-      order: [["createdAt", "DESC"]],
+      order: [[sort, direction]],
       offset: pagination.offset,
       limit: pagination.limit,
     });
@@ -90,7 +121,9 @@ router.post(
 
 router.post(
   "apiKeys.delete",
-  auth({ role: UserRole.Member }),
+  auth({
+    type: AuthenticationType.APP,
+  }),
   validate(T.APIKeysDeleteSchema),
   transaction(),
   async (ctx: APIContext<T.APIKeysDeleteReq>) => {
@@ -98,8 +131,11 @@ router.post(
     const { user } = ctx.state.auth;
     const { transaction } = ctx.state;
 
-    const key = await ApiKey.findByPk(id, {
-      lock: transaction.LOCK.UPDATE,
+    const key = await ApiKey.scope("withUser").findByPk(id, {
+      lock: {
+        level: transaction.LOCK.UPDATE,
+        of: ApiKey,
+      },
       transaction,
     });
     authorize(user, "delete", key);

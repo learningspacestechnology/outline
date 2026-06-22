@@ -1,7 +1,5 @@
-import concat from "lodash/concat";
-import uniq from "lodash/uniq";
-import uniqBy from "lodash/uniqBy";
-import { Server } from "socket.io";
+import { compact, concat, uniq, uniqBy } from "es-toolkit/compat";
+import type { Server } from "socket.io";
 import {
   Comment,
   Document,
@@ -18,6 +16,7 @@ import {
   UserMembership,
   User,
   Import,
+  Template,
 } from "@server/models";
 import { cannot } from "@server/policies";
 import {
@@ -37,11 +36,42 @@ import {
   presentImport,
 } from "@server/presenters";
 import presentNotification from "@server/presenters/notification";
-import { Event } from "../../types";
+import type { Event } from "../../types";
 
 export default class WebsocketsProcessor {
   public async perform(event: Event, socketio: Server) {
     switch (event.name) {
+      case "templates.create":
+      case "templates.update":
+      case "templates.restore": {
+        const template = await Template.findByPk(event.modelId, {
+          paranoid: false,
+        });
+        if (!template) {
+          return;
+        }
+
+        const channels = await this.getTemplateEventChannels(event, template);
+
+        return socketio.to(channels).emit("entities", {
+          event: event.name,
+          invalidatedPolicies: [template.id],
+          templateIds: [
+            {
+              id: template.id,
+              updatedAt: template.updatedAt,
+            },
+          ],
+        });
+      }
+
+      case "templates.delete": {
+        return socketio.to(`team-${event.teamId}`).emit("entities", {
+          event: event.name,
+          modelId: event.modelId,
+        });
+      }
+
       case "documents.create":
       case "documents.publish":
       case "documents.restore": {
@@ -53,27 +83,39 @@ export default class WebsocketsProcessor {
         }
         if (
           event.name === "documents.create" &&
-          event.data.source === "import"
+          event.data?.source === "import"
         ) {
           return;
         }
 
         const channels = await this.getDocumentEventChannels(event, document);
 
+        let collectionIds: { id: string; updatedAt?: Date }[] = [];
+        if (document.collectionId) {
+          const collection = await Collection.findByPk(document.collectionId, {
+            attributes: ["id", "updatedAt"],
+          });
+          if (collection) {
+            collectionIds = [
+              {
+                id: collection.id,
+                updatedAt: collection.updatedAt,
+              },
+            ];
+          }
+        }
+
         return socketio.to(channels).emit("entities", {
           event: event.name,
-          fetchIfMissing: true,
+          invalidatedPolicies:
+            event.name === "documents.create" ? [] : [document.id],
           documentIds: [
             {
               id: document.id,
               updatedAt: document.updatedAt,
             },
           ],
-          collectionIds: [
-            {
-              id: document.collectionId,
-            },
-          ],
+          collectionIds,
         });
       }
 
@@ -91,18 +133,25 @@ export default class WebsocketsProcessor {
         const channels = await this.getDocumentEventChannels(event, document);
 
         // We need to add the collection channel to let the members update the doc structure.
-        channels.push(`collection-${event.collectionId}`);
+        // In case draft is detached from a collection, fallback to previous attribute to get the right one.
+        const collectionId =
+          event.collectionId ?? event.changes?.previous.collectionId;
+
+        channels.push(`collection-${collectionId}`);
 
         return socketio.to(channels).emit(event.name, {
           document: documentToPresent,
-          collectionId: event.collectionId,
+          collectionId,
         });
       }
 
       case "documents.unarchive": {
+        const srcCollectionId =
+          event.changes?.previous.collectionId ?? event.collectionId;
+
         const [document, srcCollection] = await Promise.all([
           Document.findByPk(event.documentId, { paranoid: false }),
-          Collection.findByPk(event.data.sourceCollectionId, {
+          Collection.findByPk(srcCollectionId, {
             paranoid: false,
           }),
         ]);
@@ -120,9 +169,15 @@ export default class WebsocketsProcessor {
 
         const channels = uniq(concat(documentChannels, collectionChannels));
 
+        const destCollection = document.collectionId
+          ? await Collection.findByPk(document.collectionId, {
+              attributes: ["id", "updatedAt"],
+            })
+          : null;
+
         return socketio.to(channels).emit("entities", {
           event: event.name,
-          fetchIfMissing: true,
+          invalidatedPolicies: [document.id],
           documentIds: [
             {
               id: document.id,
@@ -130,14 +185,18 @@ export default class WebsocketsProcessor {
             },
           ],
           collectionIds: uniqBy(
-            [
-              {
-                id: document.collectionId,
-              },
+            compact([
+              destCollection
+                ? {
+                    id: destCollection.id,
+                    updatedAt: destCollection.updatedAt,
+                  }
+                : undefined,
               {
                 id: srcCollection.id,
+                updatedAt: srcCollection.updatedAt,
               },
-            ],
+            ]),
             "id"
           ),
         });
@@ -175,6 +234,7 @@ export default class WebsocketsProcessor {
         documents.forEach((document) => {
           socketio.to(`collection-${document.collectionId}`).emit("entities", {
             event: event.name,
+            invalidatedPolicies: [document.id],
             documentIds: [
               {
                 id: document.id,
@@ -183,12 +243,17 @@ export default class WebsocketsProcessor {
             ],
           });
         });
-        event.data.collectionIds.forEach((collectionId) => {
-          socketio.to(`collection-${collectionId}`).emit("entities", {
+        const moveCollections = await Collection.findAll({
+          where: { id: event.data.collectionIds },
+          attributes: ["id", "updatedAt"],
+        });
+        moveCollections.forEach((collection) => {
+          socketio.to(`collection-${collection.id}`).emit("entities", {
             event: event.name,
             collectionIds: [
               {
-                id: collectionId,
+                id: collection.id,
+                updatedAt: collection.updatedAt,
               },
             ],
           });
@@ -314,11 +379,16 @@ export default class WebsocketsProcessor {
           return;
         }
 
+        const archivedAt =
+          event.name === "collections.archive"
+            ? event.changes?.attributes.archivedAt
+            : event.changes?.previous.archivedAt;
+
         return socketio
           .to(this.getCollectionEventChannels(event, collection))
           .emit(event.name, {
             id: event.collectionId,
-            archivedAt: event.data.archivedAt,
+            archivedAt,
           });
       }
 
@@ -327,7 +397,7 @@ export default class WebsocketsProcessor {
           .to(`collection-${event.collectionId}`)
           .emit("collections.update_index", {
             collectionId: event.collectionId,
-            index: event.data.index,
+            index: event.changes?.attributes.index,
           });
       }
 
@@ -353,9 +423,9 @@ export default class WebsocketsProcessor {
 
       case "collections.remove_user": {
         const [collection, user] = await Promise.all([
-          Collection.scope({
-            method: ["withMembership", event.userId],
-          }).findByPk(event.collectionId),
+          Collection.findByPk(event.collectionId, {
+            userId: event.userId,
+          }),
           User.findByPk(event.userId),
         ]);
         if (!user) {
@@ -407,7 +477,7 @@ export default class WebsocketsProcessor {
 
       case "collections.remove_group": {
         // let everyone with access to the collection know a group was removed
-        // this includes those in the the group itself
+        // this includes those in the group itself
         socketio
           .to(`collection-${event.collectionId}`)
           .emit("collections.remove_group", {
@@ -424,9 +494,9 @@ export default class WebsocketsProcessor {
           async (groupUsers) => {
             for (const groupUser of groupUsers) {
               const [collection, user] = await Promise.all([
-                Collection.scope({
-                  method: ["withMembership", groupUser.userId],
-                }).findByPk(event.collectionId),
+                Collection.findByPk(event.collectionId, {
+                  userId: groupUser.userId,
+                }),
                 User.findByPk(groupUser.userId),
               ]);
               if (!user) {
@@ -716,9 +786,12 @@ export default class WebsocketsProcessor {
                   presentGroupMembership(groupMembership)
                 );
 
-              const collection = await Collection.scope({
-                method: ["withMembership", event.userId],
-              }).findByPk(groupMembership.collectionId);
+              const collection = await Collection.findByPk(
+                groupMembership.collectionId,
+                {
+                  userId: event.userId,
+                }
+              );
 
               if (cannot(user, "read", collection)) {
                 // tell any user clients to disconnect from the websocket channel for the collection
@@ -772,9 +845,12 @@ export default class WebsocketsProcessor {
                     .to(`user-${groupUser.userId}`)
                     .emit("collections.remove_group", payload);
 
-                  const collection = await Collection.scope({
-                    method: ["withMembership", groupUser.userId],
-                  }).findByPk(groupMembership.collectionId);
+                  const collection = await Collection.findByPk(
+                    groupMembership.collectionId,
+                    {
+                      userId: groupUser.userId,
+                    }
+                  );
 
                   if (cannot(groupUser.user, "read", collection)) {
                     // tell any user clients to disconnect from the websocket channel for the collection
@@ -896,8 +972,6 @@ export default class WebsocketsProcessor {
         channels.push(
           ...this.getCollectionEventChannels(event, document.collection)
         );
-      } else if (document.isWorkspaceTemplate) {
-        channels.push(`team-${document.teamId}`);
       } else {
         channels.push(`collection-${document.collectionId}`);
       }
@@ -922,6 +996,31 @@ export default class WebsocketsProcessor {
 
     for (const membership of groupMemberships) {
       channels.push(`group-${membership.groupId}`);
+    }
+
+    return uniq(channels);
+  }
+
+  private async getTemplateEventChannels(
+    event: Event,
+    template: Template
+  ): Promise<string[]> {
+    const channels = [];
+
+    if (event.actorId) {
+      channels.push(`user-${event.actorId}`);
+    }
+
+    if (template.collectionId) {
+      if (template.collection) {
+        channels.push(
+          ...this.getCollectionEventChannels(event, template.collection)
+        );
+      } else {
+        channels.push(`collection-${template.collectionId}`);
+      }
+    } else {
+      channels.push(`team-${template.teamId}`);
     }
 
     return uniq(channels);

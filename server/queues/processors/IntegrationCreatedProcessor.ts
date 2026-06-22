@@ -1,8 +1,10 @@
 import { IntegrationType } from "@shared/types";
 import { Integration } from "@server/models";
 import BaseProcessor from "@server/queues/processors/BaseProcessor";
-import { IntegrationEvent, Event } from "@server/types";
+import type { IntegrationEvent, Event } from "@server/types";
 import { CacheHelper } from "@server/utils/CacheHelper";
+import { RedisPrefixHelper } from "@server/utils/RedisPrefixHelper";
+import CacheIssueSourcesTask from "../tasks/CacheIssueSourcesTask";
 
 export default class IntegrationCreatedProcessor extends BaseProcessor {
   static applicableEvents: Event["name"][] = ["integrations.create"];
@@ -18,7 +20,14 @@ export default class IntegrationCreatedProcessor extends BaseProcessor {
       return;
     }
 
+    // Store the available issue sources in the integration record.
+    await new CacheIssueSourcesTask().schedule({
+      integrationId: integration.id,
+    });
+
     // Clear the cache of unfurled data for the team as it may be stale now.
-    await CacheHelper.clearData(CacheHelper.getUnfurlKey(integration.teamId));
+    await CacheHelper.clearData(
+      RedisPrefixHelper.getUnfurlKey(integration.teamId)
+    );
   }
 }

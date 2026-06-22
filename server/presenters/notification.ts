@@ -1,5 +1,5 @@
-import { Notification } from "@server/models";
-import { APIContext } from "@server/types";
+import type { Notification } from "@server/models";
+import type { APIContext } from "@server/types";
 import presentUser from "./user";
 import { presentComment, presentDocument } from ".";
 
@@ -10,6 +10,8 @@ export default async function presentNotification(
   return {
     id: notification.id,
     viewedAt: notification.viewedAt,
+    accessRequestId: notification.accessRequestId,
+    accessRequestStatus: notification.accessRequest?.status,
     archivedAt: notification.archivedAt,
     createdAt: notification.createdAt,
     event: notification.event,
@@ -26,5 +28,6 @@ export default async function presentNotification(
       : undefined,
     revisionId: notification.revisionId,
     collectionId: notification.collectionId,
+    data: notification.data,
   };
 }

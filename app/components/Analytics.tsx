@@ -1,8 +1,9 @@
-/* eslint-disable prefer-rest-params */
+/* oxlint-disable prefer-rest-params */
 /* global ga */
-import escape from "lodash/escape";
+import { escape } from "es-toolkit/compat";
 import * as React from "react";
-import { IntegrationService, PublicEnv } from "@shared/types";
+import type { PublicEnv } from "@shared/types";
+import { IntegrationService } from "@shared/types";
 import env from "~/env";
 
 type Props = {

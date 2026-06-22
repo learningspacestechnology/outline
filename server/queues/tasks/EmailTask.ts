@@ -1,9 +1,9 @@
 import emails from "@server/emails/templates";
-import BaseTask from "./BaseTask";
+import { BaseTask } from "./base/BaseTask";
 
 type Props = {
   templateName: string;
-  props: Record<string, any>;
+  props: Record<string, unknown>;
 };
 
 export default class EmailTask extends BaseTask<Props> {

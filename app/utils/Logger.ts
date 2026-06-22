@@ -1,4 +1,4 @@
-/* eslint-disable no-console */
+/* oxlint-disable no-console */
 import * as Sentry from "@sentry/react";
 import env from "~/env";
 
@@ -13,6 +13,7 @@ type LogCategory =
   | "plugins"
   | "policies";
 
+// oxlint-disable-next-line no-explicit-any
 type Extra = Record<string, any>;
 
 class Logger {

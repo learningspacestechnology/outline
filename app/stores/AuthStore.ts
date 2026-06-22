@@ -1,17 +1,19 @@
 import * as Sentry from "@sentry/react";
 import invariant from "invariant";
-import isNil from "lodash/isNil";
+import { isNil } from "es-toolkit/compat";
 import { observable, action, computed, autorun, runInAction } from "mobx";
 import { getCookie, setCookie } from "tiny-cookie";
-import { CustomTheme } from "@shared/types";
+import { toError } from "@shared/utils/error";
+import type { CustomTheme } from "@shared/types";
 import Storage from "@shared/utils/Storage";
 import { getCookieDomain, parseDomain } from "@shared/utils/domains";
-import RootStore from "~/stores/RootStore";
+import type RootStore from "~/stores/RootStore";
 import Team from "~/models/Team";
 import env from "~/env";
 import { setPostLoginPath } from "~/hooks/useLastVisitedPath";
 import { client } from "~/utils/ApiClient";
 import Desktop from "~/utils/Desktop";
+import { deleteAllDatabases } from "~/utils/developer";
 import Logger from "~/utils/Logger";
 import isCloudHosted from "~/utils/isCloudHosted";
 import Store from "./base/Store";
@@ -50,6 +52,10 @@ export default class AuthStore extends Store<Team> {
   @observable
   public collaborationToken?: string | null;
 
+  /* When set, the user will be redirected to this URL after logging out. */
+  @observable
+  public logoutRedirectUri?: string;
+
   /* A list of teams that the current user has access to. */
   @observable
   public availableTeams?: {
@@ -87,6 +93,13 @@ export default class AuthStore extends Store<Team> {
     const data: PersistedData = Storage.get(this.name) || {};
 
     this.rehydrate(data);
+
+    client.setUnauthorizedHandler((reason) =>
+      reason === "user_suspended"
+        ? this.logout({ savePath: false, revokeToken: false, clearCache: true })
+        : this.logout({ savePath: true, revokeToken: false, clearCache: false })
+    );
+
     void this.fetchAuth();
 
     // persists this entire store to localstorage whenever any keys are changed
@@ -109,7 +122,11 @@ export default class AuthStore extends Store<Team> {
         // we are signed in and the received data contains no user then sign out
         if (this.authenticated) {
           if (isNil(newData.user)) {
-            void this.logout(false, false);
+            void this.logout({
+              savePath: false,
+              clearCache: false,
+              revokeToken: false,
+            });
           }
         } else {
           this.rehydrate(newData);
@@ -207,11 +224,10 @@ export default class AuthStore extends Store<Team> {
         this.collaborationToken = res.data.collaborationToken;
 
         if (env.SENTRY_DSN) {
-          Sentry.configureScope((scope) => {
-            scope.setUser({ id: this.currentUserId! });
-            scope.setExtra("team", this.team?.name);
-            scope.setExtra("teamId", this.currentTeamId);
-          });
+          const scope = Sentry.getCurrentScope();
+          scope.setUser({ id: this.currentUserId! });
+          scope.setExtra("team", this.team?.name);
+          scope.setExtra("teamId", this.currentTeamId);
         }
 
         // Redirect to the correct custom domain or team subdomain if needed
@@ -234,14 +250,25 @@ export default class AuthStore extends Store<Team> {
         // Update the user's timezone if it has changed
         const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
         if (data.user.timezone !== timezone) {
-          const user = this.rootStore.users.get(data.user.id)!;
-          void user.save({ timezone });
+          const user = this.rootStore.users.get(data.user.id);
+          void user?.save({ timezone });
         }
       });
     } catch (err) {
-      if (err.error === "user_suspended") {
+      if (
+        err instanceof Error &&
+        "error" in err &&
+        err.error === "user_suspended"
+      ) {
         this.isSuspended = true;
-        this.suspendedContactEmail = err.data.adminEmail;
+        if (
+          "data" in err &&
+          err.data instanceof Object &&
+          "adminEmail" in err.data &&
+          typeof err.data.adminEmail === "string"
+        ) {
+          this.suspendedContactEmail = err.data.adminEmail;
+        }
         return;
       }
       throw err;
@@ -297,24 +324,36 @@ export default class AuthStore extends Store<Team> {
   /**
    * Logs the user out and optionally revokes the authentication token.
    *
+   * @param clearCache Whether to clear the IndexedDB databases used for document caching.
+   * @param revokeToken Whether the auth token should attempt to be revoked, this should be
    * @param savePath Whether the current path should be saved and returned to after login.
-   * @param tryRevokingToken Whether the auth token should attempt to be revoked, this should be
+   * @param userInitiated Whether the logout was initiated by the user.
    * disabled with requests from ApiClient to prevent infinite loops.
    */
   @action
-  logout = async (savePath = false, tryRevokingToken = true) => {
+  logout = async ({
+    clearCache = true,
+    revokeToken = true,
+    savePath = false,
+    userInitiated = false,
+  }: {
+    clearCache?: boolean;
+    revokeToken?: boolean;
+    savePath?: boolean;
+    userInitiated?: boolean;
+  }) => {
     // if this logout was forced from an authenticated route then
     // save the current path so we can go back there once signed in
     if (savePath) {
-      setPostLoginPath(window.location.pathname);
+      setPostLoginPath(window.location.pathname + window.location.search);
     }
 
-    if (tryRevokingToken) {
+    if (revokeToken) {
       try {
         // invalidate authentication token on server and unset auth cookie
         await client.post(`/auth.delete`);
       } catch (err) {
-        Logger.error("Failed to delete authentication", err);
+        Logger.error("Failed to delete authentication", toError(err));
       }
     }
 
@@ -327,6 +366,15 @@ export default class AuthStore extends Store<Team> {
       setCookie("sessions", JSON.stringify(sessions), {
         domain: getCookieDomain(window.location.hostname, isCloudHosted),
       });
+    }
+
+    if (userInitiated) {
+      this.logoutRedirectUri = env.OIDC_LOGOUT_URI;
+    }
+
+    if (clearCache) {
+      // clear IndexedDB databases used for document caching
+      await deleteAllDatabases();
     }
 
     // clear all credentials from cache (and local storage via autorun)

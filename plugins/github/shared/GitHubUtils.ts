@@ -2,6 +2,13 @@ import queryString from "query-string";
 import env from "@shared/env";
 import { integrationSettingsPath } from "@shared/utils/routeHelpers";
 
+export const GitHubOAuthNonceCookie = "githubOAuthNonce";
+
+export type OAuthState = {
+  teamId: string;
+  nonce: string;
+};
+
 export class GitHubUtils {
   public static clientId = env.GITHUB_CLIENT_ID;
 
@@ -22,7 +29,7 @@ export class GitHubUtils {
    */
   public static callbackUrl(
     { baseUrl, params }: { baseUrl: string; params?: string } = {
-      baseUrl: `${env.URL}`,
+      baseUrl: env.URL,
       params: undefined,
     }
   ) {
@@ -31,28 +38,37 @@ export class GitHubUtils {
       : `${baseUrl}/api/github.callback`;
   }
 
-  static authUrl(state: string): string {
+  static authUrl(state: OAuthState): string {
     const baseUrl = `https://github.com/apps/${env.GITHUB_APP_NAME}/installations/new`;
     const params = {
       client_id: this.clientId,
       redirect_uri: this.callbackUrl(),
-      state,
+      state: JSON.stringify(state),
     };
     return `${baseUrl}?${queryString.stringify(params)}`;
+  }
+
+  static parseState(state: string): OAuthState | undefined {
+    try {
+      return JSON.parse(state);
+    } catch {
+      return undefined;
+    }
   }
 
   static installRequestUrl(): string {
     return `${this.url}?install_request=true`;
   }
 
-  public static getColorForStatus(status: string) {
+  public static getColorForStatus(status: string, isDraftPR: boolean = false) {
     switch (status) {
       case "open":
-        return "#238636";
+        return isDraftPR ? "#848d97" : "#238636";
       case "done":
         return "#a371f7";
       case "closed":
         return "#f85149";
+      case "completed":
       case "merged":
         return "#8250df";
       case "canceled":

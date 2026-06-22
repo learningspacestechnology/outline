@@ -1,11 +1,20 @@
 import { subDays } from "date-fns";
-import { Attachment, User, Document, Collection, Team } from "@server/models";
+import {
+  Attachment,
+  User,
+  Document,
+  Collection,
+  Team,
+  Import,
+} from "@server/models";
 import {
   buildAttachment,
   buildUser,
   buildTeam,
   buildDocument,
+  buildImport,
 } from "@server/test/factories";
+import { errToString } from "@shared/utils/error";
 import teamPermanentDeleter from "./teamPermanentDeleter";
 
 describe("teamPermanentDeleter", () => {
@@ -131,6 +140,67 @@ describe("teamPermanentDeleter", () => {
     ).toEqual(0);
   });
 
+  it("should destroy attachments spanning multiple batches", async () => {
+    const team = await buildTeam({
+      deletedAt: subDays(new Date(), 90),
+    });
+    const user = await buildUser({ teamId: team.id });
+    const document = await buildDocument({
+      teamId: team.id,
+      userId: user.id,
+    });
+
+    // More than a single batch (batchLimit is 100) to ensure no attachments are
+    // skipped while deleting, which would otherwise leave rows referencing the
+    // team and cause a foreign key violation when the team is destroyed.
+    await Promise.all(
+      Array.from({ length: 150 }, () =>
+        buildAttachment({
+          teamId: team.id,
+          userId: user.id,
+          documentId: document.id,
+        })
+      )
+    );
+
+    await teamPermanentDeleter(team);
+
+    expect(
+      await Attachment.count({
+        where: {
+          teamId: team.id,
+        },
+      })
+    ).toEqual(0);
+    expect(
+      await Team.count({
+        where: {
+          id: team.id,
+        },
+      })
+    ).toEqual(0);
+  });
+
+  it("should destroy imports", async () => {
+    const team = await buildTeam({
+      deletedAt: subDays(new Date(), 90),
+    });
+    const user = await buildUser({ teamId: team.id });
+    await buildImport({
+      teamId: team.id,
+      createdById: user.id,
+    });
+    await teamPermanentDeleter(team);
+    expect(
+      await Import.count({
+        where: {
+          teamId: team.id,
+        },
+        paranoid: false,
+      })
+    ).toEqual(0);
+  });
+
   it("should error when trying to destroy undeleted team", async () => {
     const team = await buildTeam();
     let error;
@@ -138,7 +208,7 @@ describe("teamPermanentDeleter", () => {
     try {
       await teamPermanentDeleter(team);
     } catch (err) {
-      error = err.message;
+      error = errToString(err);
     }
 
     expect(error).toEqual(

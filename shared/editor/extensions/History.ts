@@ -1,7 +1,7 @@
 import { history, undo, redo } from "prosemirror-history";
-import { undoInputRule } from "prosemirror-inputrules";
-import { Command } from "prosemirror-state";
-import Extension, { CommandFactory } from "../lib/Extension";
+import type { Command } from "prosemirror-state";
+import type { CommandFactory } from "../lib/Extension";
+import Extension from "../lib/Extension";
 
 export default class History extends Extension {
   get name() {
@@ -20,7 +20,6 @@ export default class History extends Extension {
       "Mod-z": () => this.editor.commands.undo(),
       "Mod-y": () => this.editor.commands.redo(),
       "Shift-Mod-z": () => this.editor.commands.redo(),
-      Backspace: undoInputRule,
     };
   }
 

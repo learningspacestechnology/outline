@@ -1,16 +1,16 @@
 import { observer } from "mobx-react";
 import { CopyIcon } from "outline-icons";
-import * as React from "react";
+import { useState, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import ApiKey from "~/models/ApiKey";
+import type ApiKey from "~/models/ApiKey";
 import Button from "~/components/Button";
 import CopyToClipboard from "~/components/CopyToClipboard";
-import Flex from "~/components/Flex";
 import ListItem from "~/components/List/Item";
 import Text from "~/components/Text";
 import Time from "~/components/Time";
 import Tooltip from "~/components/Tooltip";
+import { HStack } from "~/components/primitives/HStack";
 import useCurrentUser from "~/hooks/useCurrentUser";
 import useUserLocale from "~/hooks/useUserLocale";
 import ApiKeyMenu from "~/menus/ApiKeyMenu";
@@ -26,46 +26,61 @@ const ApiKeyListItem = ({ apiKey }: Props) => {
   const userLocale = useUserLocale();
   const user = useCurrentUser();
 
+  const creatorText =
+    apiKey.userId === user.id
+      ? ""
+      : t(`by {{ name }}`, { name: apiKey.user.name });
+
   const subtitle = (
     <>
-      <Text type="tertiary">
-        {t(`Created`)} <Time dateTime={apiKey.createdAt} addSuffix />{" "}
-        {apiKey.userId === user.id
-          ? ""
-          : t(`by {{ name }}`, { name: user.name })}{" "}
-        &middot;{" "}
-      </Text>
-      {apiKey.lastActiveAt && (
+      {apiKey.isExpired ? (
+        <>
+          <Text type="danger">
+            {t(`Expired`)} <Time dateTime={apiKey.expiresAt!} addSuffix />
+          </Text>
+          <Text type="tertiary"> {creatorText}</Text>
+        </>
+      ) : (
         <Text type="tertiary">
-          {t("Last used")} <Time dateTime={apiKey.lastActiveAt} addSuffix />{" "}
-          &middot;{" "}
+          {t(`Created`)} <Time dateTime={apiKey.createdAt} addSuffix />{" "}
+          {creatorText}
         </Text>
       )}
-      <Text type={apiKey.isExpired ? "danger" : "tertiary"}>
-        {apiKey.expiresAt
-          ? dateToExpiry(apiKey.expiresAt, t, userLocale)
-          : t("No expiry")}
-        {apiKey.scope && <> &middot; </>}
-      </Text>
+      {apiKey.lastActiveAt && (
+        <Text type="tertiary">
+          {" "}
+          &middot; {t("Last used")}{" "}
+          <Time dateTime={apiKey.lastActiveAt} addSuffix />
+        </Text>
+      )}
+      {!apiKey.isExpired && (
+        <Text type="tertiary">
+          {" "}
+          &middot;{" "}
+          {apiKey.expiresAt
+            ? dateToExpiry(apiKey.expiresAt, t, userLocale)
+            : t("No expiry")}
+        </Text>
+      )}
       {apiKey.scope && (
         <Tooltip
           content={apiKey.scope.map((s) => (
-            <>
+            <span key={s}>
               {s}
               <br />
-            </>
+            </span>
           ))}
         >
-          <Text type="tertiary">{t("Restricted scope")}</Text>
+          <Text type="tertiary"> &middot; {t("Restricted scope")}</Text>
         </Tooltip>
       )}
     </>
   );
 
-  const [copied, setCopied] = React.useState<boolean>(false);
-  const copyTimeoutIdRef = React.useRef<ReturnType<typeof setTimeout>>();
+  const [copied, setCopied] = useState<boolean>(false);
+  const copyTimeoutIdRef = useRef<ReturnType<typeof setTimeout>>();
 
-  const handleCopy = React.useCallback(() => {
+  const handleCopy = useCallback(() => {
     if (copyTimeoutIdRef.current) {
       clearTimeout(copyTimeoutIdRef.current);
     }
@@ -82,7 +97,7 @@ const ApiKeyListItem = ({ apiKey }: Props) => {
       title={apiKey.name}
       subtitle={subtitle}
       actions={
-        <Flex align="center" gap={8}>
+        <HStack>
           {apiKey.value && handleCopy && (
             <CopyToClipboard text={apiKey.value} onCopy={handleCopy}>
               <Button type="button" icon={<CopyIcon />} neutral borderOnHover>
@@ -99,7 +114,7 @@ const ApiKeyListItem = ({ apiKey }: Props) => {
             {apiKey.obfuscatedValue}
           </Text>
           <ApiKeyMenu apiKey={apiKey} />
-        </Flex>
+        </HStack>
       }
     />
   );

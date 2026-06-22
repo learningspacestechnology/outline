@@ -1,5 +1,5 @@
 import { NodeSelection } from "prosemirror-state";
-import { CellSelection, selectedRect } from "prosemirror-tables";
+import { selectedRect } from "prosemirror-tables";
 import * as React from "react";
 import { Portal as ReactPortal } from "react-portal";
 import styled, { css } from "styled-components";
@@ -10,12 +10,16 @@ import { depths, s } from "@shared/styles";
 import { HEADER_HEIGHT } from "~/components/Header";
 import { Portal } from "~/components/Portal";
 import useEventListener from "~/hooks/useEventListener";
+import useKeyboardStickyOffset from "~/hooks/useKeyboardStickyOffset";
 import useMobile from "~/hooks/useMobile";
-import useWindowSize from "~/hooks/useWindowSize";
 import Logger from "~/utils/Logger";
 import { useEditor } from "./EditorContext";
+import { ColumnSelection } from "@shared/editor/selection/ColumnSelection";
+import { RowSelection } from "@shared/editor/selection/RowSelection";
+import { isTableSelected } from "@shared/editor/queries/table";
 
 type Props = {
+  align?: "start" | "end" | "center";
   active?: boolean;
   children: React.ReactNode;
   width?: number;
@@ -34,18 +38,26 @@ const defaultPosition = {
 function usePosition({
   menuRef,
   active,
+  align = "center",
 }: {
   menuRef: React.RefObject<HTMLDivElement>;
   active?: boolean;
+  align?: Props["align"];
 }) {
   const { view } = useEditor();
   const { selection } = view.state;
-  const menuWidth = menuRef.current?.offsetWidth;
-  const menuHeight = menuRef.current?.offsetHeight;
+  const [menuWidth, setMenuWidth] = React.useState(0);
+  const menuHeight = 36;
 
-  if (!active || !menuWidth || !menuHeight || !menuRef.current) {
-    return defaultPosition;
-  }
+  // Measure the menu width after DOM updates to ensure accurate positioning
+  React.useLayoutEffect(() => {
+    if (menuRef.current) {
+      const width = menuRef.current.offsetWidth;
+      if (width !== menuWidth) {
+        setMenuWidth(width);
+      }
+    }
+  });
 
   // based on the start and end of the selection calculate the position at
   // the center top
@@ -55,7 +67,7 @@ function usePosition({
     fromPos = view.coordsAtPos(selection.from);
     toPos = view.coordsAtPos(selection.to, -1);
   } catch (err) {
-    Logger.warn("Unable to calculate selection position", err);
+    Logger.warn("Unable to calculate selection position", { err });
     return defaultPosition;
   }
 
@@ -67,7 +79,7 @@ function usePosition({
     right: Math.max(fromPos.right, toPos.right),
   };
 
-  const offsetParent = menuRef.current.offsetParent
+  const offsetParent = menuRef.current?.offsetParent
     ? menuRef.current.offsetParent.getBoundingClientRect()
     : ({
         width: window.innerWidth,
@@ -77,34 +89,45 @@ function usePosition({
       } as DOMRect);
 
   // position at the top right of code blocks
-  const codeBlock = findParentNode(isCode)(view.state.selection);
+  const isCodeNodeSelection =
+    selection instanceof NodeSelection && isCode(selection.node);
+  const codeBlock = isCodeNodeSelection
+    ? { pos: selection.from, node: selection.node }
+    : findParentNode(isCode)(view.state.selection);
   const noticeBlock = findParentNode(
     (node) => node.type.name === "container_notice"
   )(view.state.selection);
 
-  if ((codeBlock || noticeBlock) && view.state.selection.empty) {
+  if (
+    (codeBlock || noticeBlock) &&
+    (view.state.selection.empty || isCodeNodeSelection)
+  ) {
     const position = codeBlock
       ? codeBlock.pos
       : noticeBlock
-      ? noticeBlock.pos
-      : null;
+        ? noticeBlock.pos
+        : null;
 
     if (position !== null) {
       const element = view.nodeDOM(position);
       const bounds = (element as HTMLElement).getBoundingClientRect();
-      selectionBounds.top = bounds.top;
-      selectionBounds.left = bounds.right - menuWidth;
+      selectionBounds.top = bounds.top + menuHeight;
+      selectionBounds.left = bounds.right;
       selectionBounds.right = bounds.right;
     }
   }
 
+  if (!active || !menuRef.current || !menuHeight) {
+    return defaultPosition;
+  }
+
   // tables are an oddity, and need their own positioning logic
   const isColSelection =
-    selection instanceof CellSelection && selection.isColSelection();
+    selection instanceof ColumnSelection && selection.isColSelection();
   const isRowSelection =
-    selection instanceof CellSelection && selection.isRowSelection();
+    selection instanceof RowSelection && selection.isRowSelection();
 
-  if (isColSelection && isRowSelection) {
+  if (isTableSelected(view.state)) {
     const rect = selectedRect(view.state);
     const table = view.domAtPos(rect.tableStart);
     const bounds = (table.node as HTMLElement).getBoundingClientRect();
@@ -159,6 +182,8 @@ function usePosition({
         top: Math.round(top - menuHeight - offsetParent.top),
         offset: 0,
         visible: true,
+        blockSelection: false,
+        maxWidth: "100%",
       };
     }
   }
@@ -179,7 +204,11 @@ function usePosition({
     ),
     Math.max(
       Math.max(offsetParent.x, margin),
-      centerOfSelection - menuWidth / 2
+      align === "center"
+        ? centerOfSelection - menuWidth / 2
+        : align === "start"
+          ? selectionBounds.left
+          : selectionBounds.right
     )
   );
   const top = Math.max(
@@ -199,8 +228,12 @@ function usePosition({
     top: Math.round(top - offsetParent.top),
     offset: Math.round(offset),
     maxWidth: Math.min(window.innerWidth, offsetParent.width) - margin * 2,
-    blockSelection:
-      codeBlock || isColSelection || isRowSelection || noticeBlock,
+    blockSelection: !!(
+      codeBlock ||
+      isColSelection ||
+      isRowSelection ||
+      noticeBlock
+    ),
     visible: true,
   };
 }
@@ -215,6 +248,7 @@ const FloatingToolbar = React.forwardRef(function FloatingToolbar_(
   let position = usePosition({
     menuRef,
     active: props.active,
+    align: props.align,
   });
 
   if (isSelectingText) {
@@ -232,24 +266,23 @@ const FloatingToolbar = React.forwardRef(function FloatingToolbar_(
   });
 
   const isMobile = useMobile();
-  const { height } = useWindowSize();
+  const isMobileToolbarVisible = isMobile && !!props.active && position.visible;
+
+  // Keep the mobile toolbar glued to the top of the on-screen keyboard. The
+  // hook tracks the visual viewport directly — see its implementation for the
+  // iOS specifics.
+  useKeyboardStickyOffset(menuRef, isMobileToolbarVisible);
 
   if (isMobile) {
-    if (!props.children) {
-      return null;
-    }
-
-    if (props.active) {
-      const rect = document.body.getBoundingClientRect();
+    if (isMobileToolbarVisible) {
+      // Vertical position (above the keyboard) is owned entirely by
+      // useKeyboardStickyOffset, which writes the transform directly.
       return (
         <ReactPortal>
-          <MobileWrapper
-            ref={menuRef}
-            style={{
-              bottom: `calc(100% - ${height - rect.y}px)`,
-            }}
-          >
-            {props.children}
+          <MobileWrapper ref={menuRef}>
+            {props.children && (
+              <MobileBackground>{props.children}</MobileBackground>
+            )}
           </MobileWrapper>
         </ReactPortal>
       );
@@ -262,17 +295,19 @@ const FloatingToolbar = React.forwardRef(function FloatingToolbar_(
     <Portal>
       <Wrapper
         active={props.active && position.visible}
-        arrow={!position.blockSelection}
+        arrow={!!props.children && !position.blockSelection}
         ref={menuRef}
         $offset={position.offset}
         style={{
-          width: props.width,
+          minWidth: props.width,
           maxWidth: `${position.maxWidth}px`,
           top: `${position.top}px`,
           left: `${position.left}px`,
         }}
       >
-        {props.children}
+        {props.children && (
+          <Background align={props.align}>{props.children}</Background>
+        )}
       </Wrapper>
     </Portal>
   );
@@ -287,7 +322,7 @@ type WrapperProps = {
 const arrow = (props: WrapperProps) =>
   props.arrow
     ? css`
-        &::before {
+        &::after {
           content: "";
           display: block;
           width: 24px;
@@ -295,26 +330,38 @@ const arrow = (props: WrapperProps) =>
           transform: translateX(-50%) rotate(45deg);
           background: ${s("menuBackground")};
           border-radius: 3px;
-          z-index: -1;
+          z-index: 0;
           position: absolute;
           bottom: -2px;
           left: calc(50% - ${props.$offset || 0}px);
           pointer-events: none;
+
+          // clip to show only the bottom right corner
+          clip-path: polygon(100% 50%, 100% 100%, 50% 100%);
         }
       `
     : "";
 
 const MobileWrapper = styled.div`
-  position: absolute;
+  position: fixed;
+  bottom: 0;
   left: 0;
   right: 0;
-
   width: 100vw;
-  padding: 10px 6px;
-  background-color: ${s("menuBackground")};
-  border-top: 1px solid ${s("divider")};
   box-sizing: border-box;
   z-index: ${depths.editorToolbar};
+  will-change: transform;
+
+  @media print {
+    display: none;
+  }
+`;
+
+const MobileBackground = styled.div`
+  padding: 10px 6px;
+  height: 60px;
+  background-color: ${s("menuBackground")};
+  border-top: 1px solid ${s("divider")};
 
   &:after {
     content: "";
@@ -324,27 +371,43 @@ const MobileWrapper = styled.div`
     height: 100px;
     background-color: ${s("menuBackground")};
   }
+`;
 
-  @media print {
-    display: none;
-  }
+const Background = styled.div<{ align: Props["align"] }>`
+  position: relative;
+  background-color: ${s("menuBackground")};
+  box-shadow: ${s("menuShadow")};
+  border-radius: 4px;
+  height: 36px;
+
+  ${(props) =>
+    props.align === "start" &&
+    `
+    position: absolute;
+    left: 0;
+    bottom: 0;
+  `}
+
+  ${(props) =>
+    props.align === "end" &&
+    `
+    position: absolute;
+    right: 0;
+    bottom: 0;
+  `}
 `;
 
 const Wrapper = styled.div<WrapperProps>`
   will-change: opacity, transform;
-  padding: 6px;
   position: absolute;
   z-index: ${depths.editorToolbar};
   opacity: 0;
-  background-color: ${s("menuBackground")};
-  box-shadow: ${s("menuShadow")};
-  border-radius: 4px;
   transform: scale(0.95);
-  transition: opacity 150ms cubic-bezier(0.175, 0.885, 0.32, 1.275),
+  transition:
+    opacity 150ms cubic-bezier(0.175, 0.885, 0.32, 1.275),
     transform 150ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
   transition-delay: 150ms;
   line-height: 0;
-  height: 36px;
   box-sizing: border-box;
   pointer-events: none;
   white-space: nowrap;
@@ -355,11 +418,24 @@ const Wrapper = styled.div<WrapperProps>`
     box-sizing: border-box;
   }
 
+  & button,
+  & a,
+  & input {
+    pointer-events: none;
+  }
+
   ${({ active }) =>
     active &&
     `
     transform: translateY(-6px) scale(1);
     opacity: 1;
+
+    & button,
+    & a,
+    & input {
+      pointer-events: auto;
+      transition: pointer-events 0s 300ms;
+    }
   `};
 
   @media print {

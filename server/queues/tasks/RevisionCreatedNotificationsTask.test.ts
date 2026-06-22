@@ -1,19 +1,32 @@
+import {
+  MentionType,
+  NotificationEventType,
+  SubscriptionType,
+} from "@shared/types";
+import { createContext } from "@server/context";
 import { parser } from "@server/editor";
+import type { Document } from "@server/models";
 import {
   View,
   Subscription,
   Event,
   Notification,
   Revision,
-  Document,
 } from "@server/models";
-import { buildDocument, buildUser } from "@server/test/factories";
+import {
+  buildDocument,
+  buildGroup,
+  buildGroupUser,
+  buildMention,
+  buildProseMirrorDoc,
+  buildUser,
+} from "@server/test/factories";
 import RevisionCreatedNotificationsTask from "./RevisionCreatedNotificationsTask";
 
 const ip = "127.0.0.1";
 
 beforeEach(async () => {
-  jest.resetAllMocks();
+  vi.resetAllMocks();
 });
 
 function updateDocumentText(document: Document, text: string) {
@@ -24,21 +37,27 @@ function updateDocumentText(document: Document, text: string) {
 
 describe("revisions.create", () => {
   test("should send a notification to other collaborators", async () => {
-    const spy = jest.spyOn(Notification, "create");
-    let document = await buildDocument();
-    await Revision.createFromDocument(document);
+    const spy = vi.spyOn(Notification, "create");
+    const user = await buildUser();
+    let document = await buildDocument({
+      teamId: user.teamId,
+      userId: user.id,
+    });
+    await Revision.createFromDocument(createContext({ user }), document);
 
     document = updateDocumentText(document, "Updated body content");
-    const revision = await Revision.createFromDocument(document);
     const collaborator = await buildUser({ teamId: document.teamId });
-    document.collaboratorIds = [collaborator.id];
+    const revision = await Revision.createFromDocument(
+      createContext({ user: collaborator }),
+      document
+    );
+    document.collaboratorIds = [user.id, collaborator.id];
     await document.save();
 
     const task = new RevisionCreatedNotificationsTask();
     await task.perform({
       name: "revisions.create",
       documentId: document.id,
-      collectionId: document.collectionId!,
       teamId: document.teamId,
       actorId: collaborator.id,
       modelId: revision.id,
@@ -48,13 +67,21 @@ describe("revisions.create", () => {
   });
 
   test("should not send a notification if viewed since update", async () => {
-    const spy = jest.spyOn(Notification, "create");
-    let document = await buildDocument();
-    await Revision.createFromDocument(document);
+    const spy = vi.spyOn(Notification, "create");
+    const user = await buildUser();
+    let document = await buildDocument({
+      teamId: user.teamId,
+      userId: user.id,
+    });
+    await Revision.createFromDocument(createContext({ user }), document);
+
     document = updateDocumentText(document, "Updated body content");
-    const revision = await Revision.createFromDocument(document);
     const collaborator = await buildUser({ teamId: document.teamId });
-    document.collaboratorIds = [collaborator.id];
+    const revision = await Revision.createFromDocument(
+      createContext({ user: collaborator }),
+      document
+    );
+    document.collaboratorIds = [user.id, collaborator.id];
     await document.save();
 
     await View.create({
@@ -66,7 +93,6 @@ describe("revisions.create", () => {
     await task.perform({
       name: "revisions.create",
       documentId: document.id,
-      collectionId: document.collectionId!,
       teamId: document.teamId,
       actorId: collaborator.id,
       modelId: revision.id,
@@ -76,21 +102,23 @@ describe("revisions.create", () => {
   });
 
   test("should not send a notification to last editor", async () => {
-    const spy = jest.spyOn(Notification, "create");
+    const spy = vi.spyOn(Notification, "create");
     const user = await buildUser();
     let document = await buildDocument({
       teamId: user.teamId,
       lastModifiedById: user.id,
     });
-    await Revision.createFromDocument(document);
+    await Revision.createFromDocument(createContext({ user }), document);
     document = updateDocumentText(document, "Updated body content");
-    const revision = await Revision.createFromDocument(document);
+    const revision = await Revision.createFromDocument(
+      createContext({ user }),
+      document
+    );
 
     const task = new RevisionCreatedNotificationsTask();
     await task.perform({
       name: "revisions.create",
       documentId: document.id,
-      collectionId: document.collectionId!,
       teamId: document.teamId,
       actorId: user.id,
       modelId: revision.id,
@@ -100,11 +128,18 @@ describe("revisions.create", () => {
   });
 
   test("should send a notification for subscriptions, even to collaborator", async () => {
-    const spy = jest.spyOn(Notification, "create");
-    let document = await buildDocument();
-    await Revision.createFromDocument(document);
+    const spy = vi.spyOn(Notification, "create");
+    const user = await buildUser();
+    let document = await buildDocument({
+      teamId: user.teamId,
+      userId: user.id,
+    });
+    await Revision.createFromDocument(createContext({ user }), document);
     document = updateDocumentText(document, "Updated body content");
-    const revision = await Revision.createFromDocument(document);
+    const revision = await Revision.createFromDocument(
+      createContext({ user }),
+      document
+    );
     const collaborator = await buildUser({ teamId: document.teamId });
     const subscriber = await buildUser({ teamId: document.teamId });
 
@@ -123,7 +158,6 @@ describe("revisions.create", () => {
     await task.perform({
       name: "revisions.create",
       documentId: document.id,
-      collectionId: document.collectionId!,
       teamId: document.teamId,
       actorId: collaborator.id,
       modelId: revision.id,
@@ -141,9 +175,15 @@ describe("revisions.create", () => {
       teamId: collaborator0.teamId,
       userId: collaborator0.id,
     });
-    await Revision.createFromDocument(document);
+    await Revision.createFromDocument(
+      createContext({ user: collaborator0 }),
+      document
+    );
     document = updateDocumentText(document, "Updated body content");
-    const revision = await Revision.createFromDocument(document);
+    const revision = await Revision.createFromDocument(
+      createContext({ user: collaborator0 }),
+      document
+    );
 
     await document.update({
       collaboratorIds: [collaborator0.id, collaborator1.id, collaborator2.id],
@@ -154,7 +194,6 @@ describe("revisions.create", () => {
     await task.perform({
       name: "revisions.create",
       documentId: document.id,
-      collectionId: document.collectionId!,
       teamId: document.teamId,
       actorId: collaborator0.id,
       modelId: revision.id,
@@ -163,15 +202,13 @@ describe("revisions.create", () => {
 
     const events = await Event.findAll({
       where: {
+        name: "subscriptions.create",
         teamId: document.teamId,
       },
     });
 
     // Should emit 3 `subscriptions.create` events.
     expect(events.length).toEqual(3);
-    expect(
-      events.every((event) => event.name === "subscriptions.create")
-    ).toEqual(true);
 
     // Each event should point to same document.
     expect(events.every((event) => event.documentId === document.id)).toEqual(
@@ -191,7 +228,7 @@ describe("revisions.create", () => {
   });
 
   test("should not send multiple emails", async () => {
-    const spy = jest.spyOn(Notification, "create");
+    const spy = vi.spyOn(Notification, "create");
     const collaborator0 = await buildUser();
     const collaborator1 = await buildUser({ teamId: collaborator0.teamId });
     const collaborator2 = await buildUser({ teamId: collaborator0.teamId });
@@ -199,9 +236,15 @@ describe("revisions.create", () => {
       teamId: collaborator0.teamId,
       userId: collaborator0.id,
     });
-    await Revision.createFromDocument(document);
+    await Revision.createFromDocument(
+      createContext({ user: collaborator0 }),
+      document
+    );
     document = updateDocumentText(document, "Updated body content");
-    const revision = await Revision.createFromDocument(document);
+    const revision = await Revision.createFromDocument(
+      createContext({ user: collaborator0 }),
+      document
+    );
 
     await document.update({
       collaboratorIds: [collaborator0.id, collaborator1.id, collaborator2.id],
@@ -213,7 +256,6 @@ describe("revisions.create", () => {
     await task.perform({
       name: "revisions.create",
       documentId: document.id,
-      collectionId: document.collectionId!,
       teamId: document.teamId,
       actorId: collaborator0.id,
       modelId: revision.id,
@@ -226,7 +268,7 @@ describe("revisions.create", () => {
   });
 
   test("should not create subscriptions if previously unsubscribed", async () => {
-    const spy = jest.spyOn(Notification, "create");
+    const spy = vi.spyOn(Notification, "create");
     const collaborator0 = await buildUser();
     const collaborator1 = await buildUser({ teamId: collaborator0.teamId });
     const collaborator2 = await buildUser({ teamId: collaborator0.teamId });
@@ -234,9 +276,15 @@ describe("revisions.create", () => {
       teamId: collaborator0.teamId,
       userId: collaborator0.id,
     });
-    await Revision.createFromDocument(document);
+    await Revision.createFromDocument(
+      createContext({ user: collaborator0 }),
+      document
+    );
     document = updateDocumentText(document, "Updated body content");
-    const revision = await Revision.createFromDocument(document);
+    const revision = await Revision.createFromDocument(
+      createContext({ user: collaborator0 }),
+      document
+    );
 
     await document.update({
       collaboratorIds: [collaborator0.id, collaborator1.id, collaborator2.id],
@@ -257,7 +305,6 @@ describe("revisions.create", () => {
     await task.perform({
       name: "revisions.create",
       documentId: document.id,
-      collectionId: document.collectionId!,
       teamId: document.teamId,
       actorId: collaborator0.id,
       modelId: revision.id,
@@ -266,6 +313,7 @@ describe("revisions.create", () => {
 
     const events = await Event.findAll({
       where: {
+        name: "subscriptions.create",
         teamId: document.teamId,
       },
     });
@@ -288,13 +336,19 @@ describe("revisions.create", () => {
   });
 
   test("should send a notification for subscriptions to non-collaborators", async () => {
-    const spy = jest.spyOn(Notification, "create");
+    const spy = vi.spyOn(Notification, "create");
     let document = await buildDocument();
     const collaborator = await buildUser({ teamId: document.teamId });
     const subscriber = await buildUser({ teamId: document.teamId });
-    await Revision.createFromDocument(document);
+    await Revision.createFromDocument(
+      createContext({ user: collaborator }),
+      document
+    );
     document = updateDocumentText(document, "Updated body content");
-    const revision = await Revision.createFromDocument(document);
+    const revision = await Revision.createFromDocument(
+      createContext({ user: collaborator }),
+      document
+    );
 
     // `subscriber` hasn't collaborated on `document`.
     document.collaboratorIds = [collaborator.id];
@@ -314,7 +368,6 @@ describe("revisions.create", () => {
     await task.perform({
       name: "revisions.create",
       documentId: document.id,
-      collectionId: document.collectionId!,
       teamId: document.teamId,
       actorId: collaborator.id,
       modelId: revision.id,
@@ -325,14 +378,20 @@ describe("revisions.create", () => {
   });
 
   test("should not send a notification for subscriptions to collaborators if unsubscribed", async () => {
-    const spy = jest.spyOn(Notification, "create");
+    const spy = vi.spyOn(Notification, "create");
 
     let document = await buildDocument();
-    await Revision.createFromDocument(document);
-    document = updateDocumentText(document, "Updated body content");
-    const revision = await Revision.createFromDocument(document);
     const collaborator = await buildUser({ teamId: document.teamId });
     const subscriber = await buildUser({ teamId: document.teamId });
+    await Revision.createFromDocument(
+      createContext({ user: collaborator }),
+      document
+    );
+    document = updateDocumentText(document, "Updated body content");
+    const revision = await Revision.createFromDocument(
+      createContext({ user: collaborator }),
+      document
+    );
 
     // `subscriber` has collaborated on `document`.
     document.collaboratorIds = [collaborator.id, subscriber.id];
@@ -354,7 +413,6 @@ describe("revisions.create", () => {
     await task.perform({
       name: "revisions.create",
       documentId: document.id,
-      collectionId: document.collectionId!,
       teamId: document.teamId,
       actorId: collaborator.id,
       modelId: revision.id,
@@ -366,13 +424,19 @@ describe("revisions.create", () => {
   });
 
   test("should not send a notification for subscriptions to members outside of the team", async () => {
-    const spy = jest.spyOn(Notification, "create");
+    const spy = vi.spyOn(Notification, "create");
 
     let document = await buildDocument();
-    await Revision.createFromDocument(document);
-    document = updateDocumentText(document, "Updated body content");
-    const revision = await Revision.createFromDocument(document);
     const collaborator = await buildUser({ teamId: document.teamId });
+    await Revision.createFromDocument(
+      createContext({ user: collaborator }),
+      document
+    );
+    document = updateDocumentText(document, "Updated body content");
+    const revision = await Revision.createFromDocument(
+      createContext({ user: collaborator }),
+      document
+    );
 
     // `subscriber` *does not* belong
     // to `collaborator`'s team,
@@ -398,7 +462,6 @@ describe("revisions.create", () => {
     await task.perform({
       name: "revisions.create",
       documentId: document.id,
-      collectionId: document.collectionId!,
       teamId: document.teamId,
       actorId: collaborator.id,
       modelId: revision.id,
@@ -410,11 +473,14 @@ describe("revisions.create", () => {
   });
 
   test("should not send a notification if viewed since update", async () => {
-    const spy = jest.spyOn(Notification, "create");
+    const spy = vi.spyOn(Notification, "create");
 
     const document = await buildDocument();
-    const revision = await Revision.createFromDocument(document);
     const collaborator = await buildUser({ teamId: document.teamId });
+    const revision = await Revision.createFromDocument(
+      createContext({ user: collaborator }),
+      document
+    );
     document.collaboratorIds = [collaborator.id];
     await document.save();
 
@@ -428,7 +494,6 @@ describe("revisions.create", () => {
     await task.perform({
       name: "revisions.create",
       documentId: document.id,
-      collectionId: document.collectionId!,
       teamId: document.teamId,
       actorId: collaborator.id,
       modelId: revision.id,
@@ -438,25 +503,308 @@ describe("revisions.create", () => {
   });
 
   test("should not send a notification to last editor", async () => {
-    const spy = jest.spyOn(Notification, "create");
+    const spy = vi.spyOn(Notification, "create");
 
     const user = await buildUser();
     const document = await buildDocument({
       teamId: user.teamId,
       lastModifiedById: user.id,
     });
-    const revision = await Revision.createFromDocument(document);
+    const revision = await Revision.createFromDocument(
+      createContext({ user }),
+      document
+    );
 
     const task = new RevisionCreatedNotificationsTask();
     await task.perform({
       name: "revisions.create",
       documentId: document.id,
-      collectionId: document.collectionId!,
       teamId: document.teamId,
       actorId: user.id,
       modelId: revision.id,
       ip,
     });
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  test("should send a mention notification even when change is below threshold", async () => {
+    const spy = vi.spyOn(Notification, "create");
+    const actor = await buildUser();
+    const mentioned = await buildUser({ teamId: actor.teamId, name: "Kim" });
+
+    // Build a document with some initial content
+    let document = await buildDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+    });
+    await Revision.createFromDocument(createContext({ user: actor }), document);
+
+    // Now add a mention – the only change is the mention node itself, which
+    // renders as "@<label>" in plain text and may be below the 5-char
+    // threshold that gates generic update notifications.
+    document.content = buildProseMirrorDoc([
+      ...(document.content?.content ?? []),
+      {
+        type: "paragraph",
+        content: [
+          buildMention({
+            id: "test-mention-id",
+            modelId: mentioned.id,
+            actorId: actor.id,
+            label: mentioned.name,
+          }),
+        ],
+      },
+    ]).toJSON();
+    document.updatedAt = new Date();
+    await document.save();
+
+    const revision = await Revision.createFromDocument(
+      createContext({ user: actor }),
+      document
+    );
+
+    const task = new RevisionCreatedNotificationsTask();
+    await task.perform({
+      name: "revisions.create",
+      documentId: document.id,
+      teamId: document.teamId,
+      actorId: actor.id,
+      modelId: revision.id,
+      ip,
+    });
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: NotificationEventType.MentionedInDocument,
+        userId: mentioned.id,
+        actorId: actor.id,
+        documentId: document.id,
+      })
+    );
+  });
+
+  test("should not send a notification for group mentions when disableMentions is true", async () => {
+    const spy = vi.spyOn(Notification, "create");
+    const actor = await buildUser();
+    const group = await buildGroup({
+      teamId: actor.teamId,
+      disableMentions: true,
+    });
+    const member = await buildUser({ teamId: actor.teamId });
+    await buildGroupUser({ groupId: group.id, userId: member.id });
+
+    member.setNotificationEventType(
+      NotificationEventType.GroupMentionedInDocument
+    );
+    await member.save();
+
+    let document = await buildDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+    });
+    await Revision.createFromDocument(createContext({ user: actor }), document);
+
+    // Update document to include a group mention
+    document.content = buildProseMirrorDoc([
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "text",
+            text: "Updated content with a group mention ",
+          },
+          buildMention({
+            type: MentionType.Group,
+            modelId: group.id,
+            actorId: actor.id,
+            label: group.name,
+          }),
+        ],
+      },
+    ]).toJSON();
+    document.updatedAt = new Date();
+    await document.save();
+
+    const revision = await Revision.createFromDocument(
+      createContext({ user: actor }),
+      document
+    );
+
+    const task = new RevisionCreatedNotificationsTask();
+    await task.perform({
+      name: "revisions.create",
+      documentId: document.id,
+      teamId: document.teamId,
+      actorId: actor.id,
+      modelId: revision.id,
+      ip,
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("should subscribe a mentioned user to the document", async () => {
+    const actor = await buildUser();
+    const mentioned = await buildUser({ teamId: actor.teamId, name: "Kim" });
+
+    const document = await buildDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+    });
+    await Revision.createFromDocument(createContext({ user: actor }), document);
+
+    document.content = buildProseMirrorDoc([
+      ...(document.content?.content ?? []),
+      {
+        type: "paragraph",
+        content: [buildMention({ modelId: mentioned.id, actorId: actor.id })],
+      },
+    ]).toJSON();
+    document.updatedAt = new Date();
+    await document.save();
+
+    const revision = await Revision.createFromDocument(
+      createContext({ user: actor }),
+      document
+    );
+
+    const task = new RevisionCreatedNotificationsTask();
+    await task.perform({
+      name: "revisions.create",
+      documentId: document.id,
+      teamId: document.teamId,
+      actorId: actor.id,
+      modelId: revision.id,
+      ip,
+    });
+
+    const subscription = await Subscription.findOne({
+      where: {
+        userId: mentioned.id,
+        documentId: document.id,
+        event: SubscriptionType.Document,
+      },
+    });
+    expect(subscription).not.toBeNull();
+  });
+
+  it("should respect a prior unsubscribe when a user is mentioned", async () => {
+    const actor = await buildUser();
+    const mentioned = await buildUser({ teamId: actor.teamId });
+
+    const document = await buildDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+    });
+    await Revision.createFromDocument(createContext({ user: actor }), document);
+
+    // The mentioned user previously subscribed and then unsubscribed.
+    const prior = await Subscription.create({
+      userId: mentioned.id,
+      documentId: document.id,
+      event: SubscriptionType.Document,
+    });
+    await prior.destroy();
+
+    document.content = buildProseMirrorDoc([
+      ...(document.content?.content ?? []),
+      {
+        type: "paragraph",
+        content: [buildMention({ modelId: mentioned.id, actorId: actor.id })],
+      },
+    ]).toJSON();
+    document.updatedAt = new Date();
+    await document.save();
+
+    const revision = await Revision.createFromDocument(
+      createContext({ user: actor }),
+      document
+    );
+
+    const task = new RevisionCreatedNotificationsTask();
+    await task.perform({
+      name: "revisions.create",
+      documentId: document.id,
+      teamId: document.teamId,
+      actorId: actor.id,
+      modelId: revision.id,
+      ip,
+    });
+
+    // No active subscription should exist.
+    const active = await Subscription.findOne({
+      where: {
+        userId: mentioned.id,
+        documentId: document.id,
+        event: SubscriptionType.Document,
+      },
+    });
+    expect(active).toBeNull();
+
+    // The original soft-deleted subscription should still be soft-deleted.
+    const withDeleted = await Subscription.findOne({
+      where: {
+        userId: mentioned.id,
+        documentId: document.id,
+        event: SubscriptionType.Document,
+      },
+      paranoid: false,
+    });
+    expect(withDeleted).not.toBeNull();
+    expect(withDeleted?.deletedAt).not.toBeNull();
+  });
+
+  it("should not subscribe users mentioned via a group", async () => {
+    const actor = await buildUser();
+    const group = await buildGroup({ teamId: actor.teamId });
+    const member = await buildUser({ teamId: actor.teamId });
+    await buildGroupUser({ groupId: group.id, userId: member.id });
+
+    const document = await buildDocument({
+      teamId: actor.teamId,
+      userId: actor.id,
+    });
+    await Revision.createFromDocument(createContext({ user: actor }), document);
+
+    document.content = buildProseMirrorDoc([
+      {
+        type: "paragraph",
+        content: [
+          buildMention({
+            type: MentionType.Group,
+            modelId: group.id,
+            actorId: actor.id,
+            label: group.name,
+          }),
+        ],
+      },
+    ]).toJSON();
+    document.updatedAt = new Date();
+    await document.save();
+
+    const revision = await Revision.createFromDocument(
+      createContext({ user: actor }),
+      document
+    );
+
+    const task = new RevisionCreatedNotificationsTask();
+    await task.perform({
+      name: "revisions.create",
+      documentId: document.id,
+      teamId: document.teamId,
+      actorId: actor.id,
+      modelId: revision.id,
+      ip,
+    });
+
+    const subscription = await Subscription.findOne({
+      where: {
+        userId: member.id,
+        documentId: document.id,
+        event: SubscriptionType.Document,
+      },
+    });
+    expect(subscription).toBeNull();
   });
 });

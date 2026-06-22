@@ -1,8 +1,8 @@
 import { useRegisterActions } from "kbar";
-import flattenDeep from "lodash/flattenDeep";
+import { flattenDeep } from "es-toolkit/compat";
 import { useLocation } from "react-router-dom";
 import { actionToKBar } from "~/actions";
-import { Action } from "~/types";
+import type { ActionVariant } from "~/types";
 import useActionContext from "./useActionContext";
 
 /**
@@ -12,7 +12,7 @@ import useActionContext from "./useActionContext";
  * @param actions actions to make available
  */
 export default function useCommandBarActions(
-  actions: Action[],
+  actions: ActionVariant[],
   additionalDeps: React.DependencyList = []
 ) {
   const location = useLocation();

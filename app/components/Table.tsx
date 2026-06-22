@@ -1,14 +1,16 @@
+import type {
+  SortingState,
+  ColumnSort,
+  Row as TRow,
+  AccessorFn,
+  CellContext,
+} from "@tanstack/react-table";
 import {
   useReactTable,
   getCoreRowModel,
-  SortingState,
   flexRender,
-  ColumnSort,
   functionalUpdate,
-  Row as TRow,
   createColumnHelper,
-  AccessorFn,
-  CellContext,
 } from "@tanstack/react-table";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import { observer } from "mobx-react";
@@ -24,6 +26,7 @@ import Flex from "~/components/Flex";
 import NudeButton from "~/components/NudeButton";
 import PlaceholderText from "~/components/PlaceholderText";
 import usePrevious from "~/hooks/usePrevious";
+import { transparentize } from "polished";
 
 const HEADER_HEIGHT = 40;
 
@@ -57,6 +60,7 @@ export type Props<TData> = {
   };
   rowHeight: number;
   stickyOffset?: number;
+  decorateRow?: (item: TData, rowElement: React.ReactNode) => React.ReactNode;
 };
 
 function Table<TData>({
@@ -68,6 +72,7 @@ function Table<TData>({
   page,
   rowHeight,
   stickyOffset = 0,
+  decorateRow,
 }: Props<TData>) {
   const { t } = useTranslation();
   const virtualContainerRef = React.useRef<HTMLDivElement>(null);
@@ -204,7 +209,7 @@ function Table<TData>({
         >
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const row = rows[virtualRow.index] as TRow<TData>;
-            return (
+            const baseRow = (
               <TR
                 role="row"
                 key={row.id}
@@ -219,11 +224,23 @@ function Table<TData>({
                 $columns={gridColumns}
               >
                 {row.getAllCells().map((cell) => (
-                  <TD role="cell" key={cell.id}>
+                  <TD
+                    role="cell"
+                    key={cell.id}
+                    className={cell.column.id === "action" ? "actions" : ""}
+                  >
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </TD>
                 ))}
               </TR>
+            );
+
+            return decorateRow ? (
+              <React.Fragment key={row.id}>
+                {decorateRow(row.original, baseRow)}
+              </React.Fragment>
+            ) : (
+              baseRow
             );
           })}
         </TBody>
@@ -320,7 +337,8 @@ const THead = styled.div<{ $topPos: number }>`
   color: ${s("textSecondary")};
   font-weight: 500;
 
-  border-bottom: 1px solid ${s("divider")};
+  border-bottom: 1px solid
+    ${(props) => transparentize(0.3, props.theme.divider)};
   background: ${s("background")};
 `;
 
@@ -334,10 +352,16 @@ const TR = styled.div<{ $columns: string }>`
   display: grid;
   grid-template-columns: ${({ $columns }) => `${$columns}`};
   align-items: center;
-  border-bottom: 1px solid ${s("divider")};
+  border-bottom: 1px solid
+    ${(props) => transparentize(0.3, props.theme.divider)};
+  overflow: hidden;
 
   &:last-child {
     border-bottom: 0;
+  }
+
+  &:hover ${NudeButton}[aria-haspopup="menu"] {
+    opacity: 1;
   }
 `;
 
@@ -357,7 +381,8 @@ const TD = styled.span`
   padding: 10px 6px;
   font-size: 14px;
   text-wrap: wrap;
-  word-break: break-word;
+  overflow: hidden;
+  text-overflow: ellipsis;
 
   &:first-child {
     font-size: 15px;
@@ -381,10 +406,18 @@ const TD = styled.span`
     right: 0;
   }
 
-  ${NudeButton} {
+  ${NudeButton}[aria-haspopup="menu"] {
+    vertical-align: middle;
+    opacity: 0;
+    transition: opacity 100ms ease-in-out;
+
     &:hover,
     &[aria-expanded="true"] {
       background: ${s("sidebarControlHoverBackground")};
+    }
+
+    &[aria-expanded="true"] {
+      opacity: 1;
     }
   }
 `;

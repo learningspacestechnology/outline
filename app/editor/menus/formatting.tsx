@@ -17,42 +17,80 @@ import {
   IndentIcon,
   CopyIcon,
   Heading3Icon,
+  TableMergeCellsIcon,
+  TableSplitCellsIcon,
+  PaletteIcon,
+  CollapseIcon,
 } from "outline-icons";
-import { EditorState } from "prosemirror-state";
-import * as React from "react";
-import styled from "styled-components";
-import Highlight from "@shared/editor/marks/Highlight";
+import { v4 as uuidv4 } from "uuid";
+import CellBackgroundColorPicker from "../components/CellBackgroundColorPicker";
+import HighlightColorPicker from "../components/HighlightColorPicker";
+
+import { getDocumentHighlightColors } from "@shared/editor/queries/getDocumentHighlightColors";
 import { getMarksBetween } from "@shared/editor/queries/getMarksBetween";
-import { isInCode } from "@shared/editor/queries/isInCode";
 import { isInList } from "@shared/editor/queries/isInList";
+import { isListActive } from "@shared/editor/queries/isListActive";
 import { isMarkActive } from "@shared/editor/queries/isMarkActive";
 import { isNodeActive } from "@shared/editor/queries/isNodeActive";
-import { MenuItem } from "@shared/editor/types";
+import type { MenuItem, SelectionContext } from "@shared/editor/types";
 import { metaDisplay } from "@shared/utils/keyboard";
+import { t } from "i18next";
 import CircleIcon from "~/components/Icons/CircleIcon";
-import { Dictionary } from "~/hooks/useDictionary";
+import {
+  getColorSetForSelectedCells,
+  getDocumentTableBackgroundColors,
+  hasNodeAttrMarkCellSelection,
+  hasNodeAttrMarkWithAttrsCellSelection,
+  isMergedCellSelection,
+  isMultipleCellSelection,
+} from "@shared/editor/queries/table";
+import type { CellSelection } from "prosemirror-tables";
+import TableCell from "@shared/editor/nodes/TableCell";
+import Highlight from "@shared/editor/marks/Highlight";
+import { DottedCircleIcon } from "~/components/Icons/DottedCircleIcon";
 
-export default function formattingMenuItems(
-  state: EditorState,
-  isTemplate: boolean,
-  isMobile: boolean,
-  dictionary: Dictionary
-): MenuItem[] {
-  const { schema } = state;
-  const isCode = isInCode(state);
-  const isCodeBlock = isInCode(state, { onlyBlock: true });
-  const isEmpty = state.selection.empty;
+/**
+ * Returns menu items for the default formatting selection toolbar.
+ *
+ * @param ctx - the current selection context.
+ * @returns an array of menu items.
+ */
+export default function formattingMenuItems(ctx: SelectionContext): MenuItem[] {
+  const {
+    schema,
+    state,
+    isTemplate,
+    isMobile,
+    isTouch,
+    isEmpty,
+    isInCode,
+    isInCodeBlock,
+    isInList: isList,
+    isTableCell,
+  } = ctx;
 
   const highlight = getMarksBetween(
     state.selection.from,
     state.selection.to,
     state
-  ).find(({ mark }) => mark.type.name === "highlight");
+  ).find(({ mark }) => mark.type === state.schema.marks.highlight);
+
+  const cellSelectionHasBackground = isTableCell
+    ? hasNodeAttrMarkCellSelection(
+        state.selection as CellSelection,
+        "background"
+      )
+    : false;
+
+  const selectedCellsColorSet = getColorSetForSelectedCells(state.selection);
+
+  const canFormatInline = !isInCodeBlock && (!isMobile || !isEmpty);
+  const canFormatBlock = !isInCodeBlock && (!isMobile || isEmpty);
 
   return [
     {
       name: "placeholder",
-      tooltip: dictionary.placeholder,
+      tooltip: t("Placeholder"),
       icon: <InputIcon />,
       active: isMarkActive(schema.marks.placeholder),
       visible: isTemplate && (!isMobile || !isEmpty),
@@ -63,184 +101,362 @@ export default function formattingMenuItems(
     },
     {
       name: "strong",
-      tooltip: dictionary.strong,
+      tooltip: t("Bold"),
       shortcut: `${metaDisplay}+B`,
       icon: <BoldIcon />,
       active: isMarkActive(schema.marks.strong),
-      visible: !isCode && (!isMobile || !isEmpty),
+      visible: canFormatInline,
     },
     {
       name: "em",
-      tooltip: dictionary.em,
+      tooltip: t("Italic"),
       shortcut: `${metaDisplay}+I`,
       icon: <ItalicIcon />,
       active: isMarkActive(schema.marks.em),
-      visible: !isCode && (!isMobile || !isEmpty),
+      visible: canFormatInline,
     },
     {
       name: "strikethrough",
-      tooltip: dictionary.strikethrough,
+      tooltip: t("Strikethrough"),
       shortcut: `${metaDisplay}+D`,
       icon: <StrikethroughIcon />,
       active: isMarkActive(schema.marks.strikethrough),
-      visible: !isCode && (!isMobile || !isEmpty),
+      visible: canFormatInline,
     },
     {
-      tooltip: dictionary.mark,
-      shortcut: `${metaDisplay}+Ctrl+H`,
+      tooltip: t("Background color"),
+      icon:
+        getColorSetForSelectedCells(state.selection).size > 1 ? (
+          <CircleIcon color="rainbow" />
+        ) : getColorSetForSelectedCells(state.selection).size === 1 ? (
+          <CircleIcon
+            color={
+              getColorSetForSelectedCells(state.selection).values().next().value
+            }
+          />
+        ) : (
+          <PaletteIcon />
+        ),
+      visible: !isInCode && (!isMobile || !isEmpty) && isTableCell,
+      children: (): MenuItem[] => {
+        const documentTableColors = getDocumentTableBackgroundColors(state);
+
+        const nonPresetDocumentColors = documentTableColors.filter(
+          (color: string) =>
+            !TableCell.isPresetColor(color) && !selectedCellsColorSet.has(color)
+        );
+
+        return [
+          {
+            name: "toggleCellSelectionBackgroundAndCollapseSelection",
+            label: t("None"),
+            icon: <DottedCircleIcon retainColor color="transparent" />,
+            active: () => (cellSelectionHasBackground ? false : true),
+            attrs: { color: null },
+          },
+          ...TableCell.presetColors.map((preset) => ({
+            name: "toggleCellSelectionBackgroundAndCollapseSelection",
+            label: preset.name,
+            icon: <CircleIcon retainColor color={preset.hex} />,
+            active: () =>
+              hasNodeAttrMarkWithAttrsCellSelection(
+                state.selection as CellSelection,
+                "background",
+                { color: preset.hex }
+              ),
+            attrs: { color: preset.hex },
+          })),
+          ...(selectedCellsColorSet.size === 1 &&
+          !TableCell.isPresetColor(selectedCellsColorSet.values().next().value)
+            ? [
+                {
+                  name: "toggleCellSelectionBackgroundAndCollapseSelection",
+                  label: selectedCellsColorSet.values().next().value,
+                  icon: (
+                    <CircleIcon
+                      retainColor
+                      color={selectedCellsColorSet.values().next().value}
+                    />
+                  ),
+                  active: () => true,
+                  attrs: { color: selectedCellsColorSet.values().next().value },
+                },
+              ]
+            : []),
+          ...nonPresetDocumentColors.map((color: string) => ({
+            name: "toggleCellSelectionBackgroundAndCollapseSelection",
+            label: color,
+            icon: <CircleIcon retainColor color={color} />,
+            active: () => selectedCellsColorSet.has(color),
+            attrs: { color },
+          })),
+          {
+            icon: <CircleIcon retainColor color="rainbow" />,
+            label: "Custom",
+            children: [
+              {
+                content: (
+                  <CellBackgroundColorPicker
+                    command="toggleCellSelectionBackground"
+                    activeColor={
+                      selectedCellsColorSet.size === 1
+                        ? selectedCellsColorSet.values().next().value
+                        : ""
+                    }
+                  />
+                ),
+                preventCloseCondition: () =>
+                  !!document.activeElement?.matches(
+                    ".ProseMirror.ProseMirror-focused"
+                  ),
+              },
+            ],
+          },
+        ];
+      },
+    },
+    {
+      tooltip: t("Highlight"),
+      shortcut: `${metaDisplay}+⇧+H`,
       icon: highlight ? (
-        <CircleIcon color={highlight.mark.attrs.color || Highlight.colors[0]} />
+        <CircleIcon
+          color={highlight.mark.attrs.color || Highlight.presetColors[0].hex}
+        />
       ) : (
         <HighlightIcon />
       ),
       active: () => !!highlight,
-      visible: !isCode && (!isMobile || !isEmpty),
-      children: [
-        ...(highlight
-          ? [
+      visible: !isInCode && (!isMobile || !isEmpty) && !isTableCell,
+      children: (): MenuItem[] => {
+        const documentHighlightColors = getDocumentHighlightColors(state);
+
+        const currentHighlightColor = highlight?.mark.attrs.color;
+        const nonPresetDocumentColors = documentHighlightColors.filter(
+          (color: string) =>
+            !Highlight.isPresetColor(color) && color !== currentHighlightColor
+        );
+
+        return [
+          ...(highlight
+            ? [
+                {
+                  name: "highlight",
+                  label: t("None"),
+                  icon: <DottedCircleIcon retainColor color="transparent" />,
+                  active: () => false,
+                  attrs: { color: highlight.mark.attrs.color },
+                },
+              ]
+            : []),
+          ...Highlight.presetColors.map((preset) => ({
+            name: "highlight",
+            label: preset.name,
+            icon: <CircleIcon retainColor color={preset.hex} />,
+            active: isMarkActive(schema.marks.highlight, { color: preset.hex }),
+            attrs: { color: preset.hex },
+          })),
+          ...(highlight &&
+          highlight.mark.attrs.color &&
+          !Highlight.isPresetColor(highlight.mark.attrs.color)
+            ? [
+                {
+                  name: "highlight",
+                  label: highlight.mark.attrs.color,
+                  icon: (
+                    <CircleIcon
+                      retainColor
+                      color={highlight.mark.attrs.color}
+                    />
+                  ),
+                  active: isMarkActive(schema.marks.highlight, {
+                    color: highlight.mark.attrs.color,
+                  }),
+                  attrs: { color: highlight.mark.attrs.color },
+                },
+              ]
+            : []),
+          ...nonPresetDocumentColors.map((color: string) => ({
+            name: "highlight",
+            label: color,
+            icon: <CircleIcon retainColor color={color} />,
+            active: () => currentHighlightColor === color,
+            attrs: { color },
+          })),
+          {
+            icon: <CircleIcon retainColor color="rainbow" />,
+            label: "Custom",
+            children: [
               {
-                name: "highlight",
-                label: dictionary.none,
-                icon: <DottedCircleIcon retainColor color="transparent" />,
-                active: () => false,
-                attrs: { color: highlight.mark.attrs.color },
+                content: (
+                  <HighlightColorPicker
+                    activeColor={
+                      highlight?.mark.attrs.color ||
+                      Highlight.presetColors[0].hex
+                    }
+                  />
+                ),
+                preventCloseCondition: () =>
+                  !!document.activeElement?.matches(
+                    ".ProseMirror.ProseMirror-focused"
+                  ),
               },
-            ]
-          : []),
-        ...Highlight.colors.map((color, index) => ({
-          name: "highlight",
-          label: Highlight.colorNames[index],
-          icon: <CircleIcon retainColor color={color} />,
-          active: isMarkActive(schema.marks.highlight, { color }),
-          attrs: { color },
-        })),
-      ],
+            ],
+          },
+        ];
+      },
     },
     {
       name: "code_inline",
-      tooltip: dictionary.codeInline,
+      tooltip: t("Code"),
       shortcut: `${metaDisplay}+E`,
       icon: <CodeIcon />,
       active: isMarkActive(schema.marks.code_inline),
-      visible: !isCodeBlock && (!isMobile || !isEmpty),
+      visible: canFormatInline,
     },
     {
       name: "separator",
-      visible: !isCodeBlock,
+      visible: !isInCodeBlock,
     },
     {
       name: "heading",
-      tooltip: dictionary.heading,
+      tooltip: t("Heading"),
       shortcut: `⇧+Ctrl+1`,
       icon: <Heading1Icon />,
       active: isNodeActive(schema.nodes.heading, { level: 1 }),
       attrs: { level: 1 },
-      visible: !isCodeBlock && (!isMobile || isEmpty),
+      visible: canFormatBlock,
     },
     {
       name: "heading",
-      tooltip: dictionary.subheading,
+      tooltip: t("Subheading"),
       shortcut: `⇧+Ctrl+2`,
       icon: <Heading2Icon />,
       active: isNodeActive(schema.nodes.heading, { level: 2 }),
       attrs: { level: 2 },
-      visible: !isCodeBlock && (!isMobile || isEmpty),
+      visible: canFormatBlock,
     },
     {
       name: "heading",
-      tooltip: dictionary.subheading,
+      tooltip: t("Subheading"),
       shortcut: `⇧+Ctrl+3`,
       icon: <Heading3Icon />,
       active: isNodeActive(schema.nodes.heading, { level: 3 }),
       attrs: { level: 3 },
-      visible: !isCodeBlock && (!isMobile || isEmpty),
+      visible: canFormatBlock,
     },
     {
       name: "blockquote",
-      tooltip: dictionary.quote,
+      tooltip: t("Quote"),
       shortcut: `${metaDisplay}+]`,
       icon: <BlockQuoteIcon />,
       active: isNodeActive(schema.nodes.blockquote),
       attrs: { level: 2 },
-      visible: !isCodeBlock && (!isMobile || isEmpty),
+      visible: !isInCodeBlock && !isTableCell && (!isMobile || isEmpty),
     },
     {
       name: "separator",
-      visible: !isCodeBlock,
+    },
+    {
+      name: "mergeCells",
+      tooltip: t("Merge cells"),
+      icon: <TableMergeCellsIcon />,
+      visible: isMultipleCellSelection(state),
+    },
+    {
+      name: "splitCell",
+      tooltip: t("Split cell"),
+      icon: <TableSplitCellsIcon />,
+      visible: isMergedCellSelection(state),
+    },
+    {
+      name: "container_toggle",
+      icon: <CollapseIcon />,
+      tooltip: t("Toggle block"),
+      active: isNodeActive(schema.nodes.container_toggle),
+      attrs: { id: uuidv4() },
+      visible: canFormatBlock,
+    },
+    {
+      name: "separator",
     },
     {
       name: "checkbox_list",
-      tooltip: dictionary.checkboxList,
+      tooltip: t("Todo list"),
       shortcut: `⇧+Ctrl+7`,
       icon: <TodoListIcon />,
       keywords: "checklist checkbox task",
-      active: isNodeActive(schema.nodes.checkbox_list),
-      visible: !isCodeBlock && (!isMobile || isEmpty),
+      active: isListActive(schema.nodes.checkbox_list),
+      visible: !isInCodeBlock && !isTableCell && (!isList || !isTouch),
     },
     {
       name: "bullet_list",
-      tooltip: dictionary.bulletList,
+      tooltip: t("Bulleted list"),
       shortcut: `⇧+Ctrl+8`,
       icon: <BulletedListIcon />,
-      active: isNodeActive(schema.nodes.bullet_list),
-      visible: !isCodeBlock && (!isMobile || isEmpty),
+      active: isListActive(schema.nodes.bullet_list),
+      visible: !isInCodeBlock && !isTableCell && (!isList || !isTouch),
     },
     {
       name: "ordered_list",
-      tooltip: dictionary.orderedList,
+      tooltip: t("Ordered list"),
       shortcut: `⇧+Ctrl+9`,
       icon: <OrderedListIcon />,
-      active: isNodeActive(schema.nodes.ordered_list),
-      visible: !isCodeBlock && (!isMobile || isEmpty),
+      active: isListActive(schema.nodes.ordered_list),
+      visible: !isInCodeBlock && !isTableCell && (!isList || !isTouch),
     },
     {
       name: "outdentList",
-      tooltip: dictionary.outdent,
+      tooltip: t("Outdent"),
       shortcut: `⇧+Tab`,
       icon: <OutdentIcon />,
       visible:
-        isMobile && isInList(state, { types: ["ordered_list", "bullet_list"] }),
+        (isTouch || isMobile) &&
+        isInList(state, { types: ["ordered_list", "bullet_list"] }),
     },
     {
       name: "indentList",
-      tooltip: dictionary.indent,
+      tooltip: t("Indent"),
       shortcut: `Tab`,
       icon: <IndentIcon />,
       visible:
-        isMobile && isInList(state, { types: ["ordered_list", "bullet_list"] }),
+        (isTouch || isMobile) &&
+        isInList(state, { types: ["ordered_list", "bullet_list"] }),
     },
     {
       name: "outdentCheckboxList",
-      tooltip: dictionary.outdent,
+      tooltip: t("Outdent"),
       shortcut: `⇧+Tab`,
       icon: <OutdentIcon />,
-      visible: isMobile && isInList(state, { types: ["checkbox_list"] }),
+      visible:
+        (isTouch || isMobile) && isInList(state, { types: ["checkbox_list"] }),
     },
     {
       name: "indentCheckboxList",
-      tooltip: dictionary.indent,
+      tooltip: t("Indent"),
       shortcut: `Tab`,
       icon: <IndentIcon />,
-      visible: isMobile && isInList(state, { types: ["checkbox_list"] }),
+      visible:
+        (isTouch || isMobile) && isInList(state, { types: ["checkbox_list"] }),
     },
     {
       name: "separator",
-      visible: !isCodeBlock,
+      visible: !isInCodeBlock,
     },
     {
-      name: "link",
-      tooltip: dictionary.createLink,
+      name: "addLink",
+      tooltip: t("Create link"),
       shortcut: `${metaDisplay}+K`,
       icon: <LinkIcon />,
       attrs: { href: "" },
-      visible: !isCodeBlock && (!isMobile || !isEmpty),
+      active: isMarkActive(schema.marks.link, undefined, { exact: true }),
+      visible: canFormatInline,
     },
     {
       name: "comment",
-      tooltip: dictionary.comment,
+      tooltip: t("Comment"),
       shortcut: `${metaDisplay}+⌥+M`,
       icon: <CommentIcon />,
-      label: isCodeBlock ? dictionary.comment : undefined,
+      label: isInCodeBlock ? t("Comment") : undefined,
       active: isMarkActive(
         schema.marks.comment,
         { resolved: false },
@@ -250,21 +466,14 @@ export default function formattingMenuItems(
     },
     {
       name: "separator",
-      visible: isCode && !isCodeBlock && (!isMobile || !isEmpty),
+      visible: isInCode && !isInCodeBlock && (!isMobile || !isEmpty),
     },
     {
       name: "copyToClipboard",
       icon: <CopyIcon />,
-      tooltip: dictionary.copy,
+      tooltip: t("Copy"),
       shortcut: `${metaDisplay}+C`,
-      visible: isCode && !isCodeBlock && (!isMobile || !isEmpty),
+      visible: isInCode && !isInCodeBlock && (!isMobile || !isEmpty),
     },
   ];
 }
-
-const DottedCircleIcon = styled(CircleIcon)`
-  circle {
-    stroke: ${(props) => props.theme.textSecondary};
-    stroke-dasharray: 2, 2;
-  }
-`;

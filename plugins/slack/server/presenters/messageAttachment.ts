@@ -1,4 +1,4 @@
-import { Document, Collection, Team } from "@server/models";
+import type { Document, Collection, Team } from "@server/models";
 
 type Action = {
   type: string;
@@ -22,7 +22,7 @@ export function presentMessageAttachment(
 
   return {
     color: collection?.color,
-    title: document.title,
+    title: document.titleWithDefault,
     title_link: `${team.url}${document.url}`,
     footer: collection?.name,
     callback_id: document.id,

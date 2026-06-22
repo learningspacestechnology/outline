@@ -1,4 +1,4 @@
-import * as React from "react";
+import { isUUID } from "validator";
 import styled from "styled-components";
 import { s } from "../styles";
 
@@ -17,7 +17,7 @@ type Props = {
 export default function EmojiIcon({ size = 24, emoji, ...rest }: Props) {
   return (
     <Span $size={size} {...rest}>
-      <SVG size={size} emoji={emoji} />
+      <SVG size={size} emoji={isUUID(emoji) ? "�" : emoji} />
     </Span>
   );
 }
@@ -30,7 +30,12 @@ const Span = styled.span<{ $size: number }>`
 `;
 
 const SVG = ({ size, emoji }: { size: number; emoji: string }) => (
-  <svg width={size} height={size} xmlns="http://www.w3.org/2000/svg">
+  <svg
+    width={size}
+    height={size}
+    xmlns="http://www.w3.org/2000/svg"
+    aria-hidden="true"
+  >
     <text
       x="50%"
       y="55%"

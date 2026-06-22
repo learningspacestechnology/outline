@@ -1,16 +1,27 @@
 import { subHours } from "date-fns";
-import differenceBy from "lodash/differenceBy";
+import { differenceBy } from "es-toolkit/compat";
 import { Op } from "sequelize";
 import { MentionType, NotificationEventType } from "@shared/types";
-import { createSubscriptionsForDocument } from "@server/commands/subscriptionCreator";
+import {
+  createSubscriptionsForDocument,
+  subscribeUsersToDocument,
+} from "@server/commands/subscriptionCreator";
 import env from "@server/env";
 import Logger from "@server/logging/Logger";
-import { Document, Revision, Notification, User, View } from "@server/models";
+import {
+  Document,
+  Group,
+  Revision,
+  Notification,
+  User,
+  View,
+  GroupUser,
+} from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import NotificationHelper from "@server/models/helpers/NotificationHelper";
-import { RevisionEvent } from "@server/types";
+import type { RevisionEvent } from "@server/types";
 import { canUserAccessDocument } from "@server/utils/permissions";
-import BaseTask, { TaskPriority } from "./BaseTask";
+import { BaseTask, TaskPriority } from "./base/BaseTask";
 
 export default class RevisionCreatedNotificationsTask extends BaseTask<RevisionEvent> {
   public async perform(event: RevisionEvent) {
@@ -27,38 +38,43 @@ export default class RevisionCreatedNotificationsTask extends BaseTask<RevisionE
 
     const before = await revision.before();
 
-    // If the content looks the same, don't send notifications
-    if (!DocumentHelper.isChangeOverThreshold(before, revision, 5)) {
-      Logger.info(
-        "processor",
-        `suppressing notifications as update has insignificant changes`
-      );
-      return;
-    }
-
-    // Send notifications to mentioned users first
+    // Send notifications to mentioned users first – these must be processed
+    // regardless of the change threshold as even a small edit can add a mention.
     const oldMentions = before
-      ? DocumentHelper.parseMentions(before, { type: MentionType.User })
+      ? [...DocumentHelper.parseMentions(before, { type: MentionType.User })]
       : [];
-    const newMentions = DocumentHelper.parseMentions(document, {
-      type: MentionType.User,
-    });
-    const mentions = differenceBy(newMentions, oldMentions, "id");
-    const userIdsMentioned: string[] = [];
+    const newMentions = [
+      ...DocumentHelper.parseMentions(document, {
+        type: MentionType.User,
+      }),
+    ];
 
+    const mentions = differenceBy(newMentions, oldMentions, "id");
+    const userIdsProcessed = new Set<string>();
+    const userIdsMentioned: string[] = [];
+    const usersToSubscribe: User[] = [];
     for (const mention of mentions) {
-      if (userIdsMentioned.includes(mention.modelId)) {
+      if (userIdsProcessed.has(mention.modelId)) {
+        continue;
+      }
+      userIdsProcessed.add(mention.modelId);
+
+      const recipient = await User.findByPk(mention.modelId);
+
+      if (
+        !recipient ||
+        recipient.id === mention.actorId ||
+        !(await canUserAccessDocument(recipient, document.id))
+      ) {
         continue;
       }
 
-      const recipient = await User.findByPk(mention.modelId);
+      usersToSubscribe.push(recipient);
+
       if (
-        recipient &&
-        recipient.id !== mention.actorId &&
         recipient.subscribedToEventType(
           NotificationEventType.MentionedInDocument
-        ) &&
-        (await canUserAccessDocument(recipient, document.id))
+        )
       ) {
         await Notification.create({
           event: NotificationEventType.MentionedInDocument,
@@ -68,8 +84,85 @@ export default class RevisionCreatedNotificationsTask extends BaseTask<RevisionE
           teamId: document.teamId,
           documentId: document.id,
         });
+
         userIdsMentioned.push(recipient.id);
       }
+    }
+
+    await subscribeUsersToDocument(usersToSubscribe, document, event);
+
+    // Send notifications to users in mentioned groups
+    const oldGroupMentions = before
+      ? DocumentHelper.parseMentions(before, { type: MentionType.Group })
+      : [];
+    const newGroupMentions = DocumentHelper.parseMentions(document, {
+      type: MentionType.Group,
+    });
+
+    const groupMentions = differenceBy(
+      newGroupMentions,
+      oldGroupMentions,
+      "id"
+    );
+    const mentionedGroup: string[] = [];
+    for (const group of groupMentions) {
+      if (mentionedGroup.includes(group.modelId)) {
+        continue;
+      }
+
+      // Check if the group has mentions disabled
+      const groupModel = await Group.findByPk(group.modelId);
+      if (groupModel?.disableMentions) {
+        continue;
+      }
+
+      const usersFromMentionedGroup = await GroupUser.findAll({
+        where: {
+          groupId: group.modelId,
+        },
+        order: [["permission", "ASC"]],
+      });
+
+      const mentionedUser: string[] = [];
+      for (const user of usersFromMentionedGroup) {
+        if (mentionedUser.includes(user.userId)) {
+          continue;
+        }
+
+        const recipient = await User.findByPk(user.userId);
+        if (
+          recipient &&
+          recipient.id !== group.actorId &&
+          recipient.subscribedToEventType(
+            NotificationEventType.GroupMentionedInDocument
+          ) &&
+          (await canUserAccessDocument(recipient, document.id))
+        ) {
+          await Notification.create({
+            event: NotificationEventType.GroupMentionedInDocument,
+            groupId: group.modelId,
+            userId: recipient.id,
+            revisionId: event.modelId,
+            actorId: group.actorId,
+            teamId: document.teamId,
+            documentId: document.id,
+          });
+
+          mentionedUser.push(user.userId);
+        }
+      }
+
+      mentionedGroup.push(group.modelId);
+    }
+
+    // If the content change is insignificant, don't send generic update
+    // notifications (mention notifications above are still sent).
+    if (!DocumentHelper.isChangeOverThreshold(before, revision, 5)) {
+      Logger.info(
+        "processor",
+        `suppressing update notifications as change has insignificant edits`
+      );
+      return;
     }
 
     const recipients = (

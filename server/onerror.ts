@@ -1,20 +1,19 @@
-import fs from "fs";
-import http from "http";
-import path from "path";
+import fs from "node:fs";
+import http from "node:http";
+import path from "node:path";
 import formidable from "formidable";
-import Koa from "koa";
-import escape from "lodash/escape";
-import isNil from "lodash/isNil";
-import snakeCase from "lodash/snakeCase";
+import type Koa from "koa";
+import { escape, isNil, snakeCase } from "es-toolkit/compat";
 import env from "@server/env";
 import { ClientClosedRequestError, InternalError } from "@server/errors";
 import { requestErrorHandler } from "@server/logging/sentry";
+import type { AppContext } from "@server/types";
 
 let errorHtmlCache: Buffer | undefined;
 
 export default function onerror(app: Koa) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  app.context.onerror = function (err: any) {
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+  app.context.onerror = function (this: AppContext, err: any) {
     // Don't do anything if there is no error, this allows you to pass `this.onerror` to node-style callbacks.
     if (isNil(err)) {
       return;
@@ -27,19 +26,30 @@ export default function onerror(app: Koa) {
       if (err.internalCode === 1002) {
         err = ClientClosedRequestError();
       }
+    } else if (
+      err.code === "HPE_INVALID_EOF_STATE" ||
+      err.code === "ECONNRESET" ||
+      err.code === "EPIPE"
+    ) {
+      err = ClientClosedRequestError();
     }
 
-    // Push only unknown and 500 status errors to sentry
-    if (
-      typeof err.status !== "number" ||
-      !http.STATUS_CODES[err.status] ||
-      err.status === 500
-    ) {
+    // Push only errors explicitly marked for Sentry reporting.
+    // For unknown errors without isReportable property, report them as well
+    // to ensure we don't miss unexpected errors.
+    const shouldReport =
+      err.isReportable === true ||
+      (err.isReportable !== false &&
+        (typeof err.status !== "number" ||
+          !http.STATUS_CODES[err.status] ||
+          err.status === 500));
+
+    if (shouldReport) {
       requestErrorHandler(err, this);
 
       if (!(err instanceof InternalError)) {
         if (env.ENVIRONMENT === "test") {
-          // eslint-disable-next-line no-console
+          // oxlint-disable-next-line no-console
           console.error(err);
         }
         err = InternalError();
@@ -82,11 +92,10 @@ export default function onerror(app: Koa) {
   return app;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
 function wrapInNativeError(err: any): Error {
   // When dealing with cross-globals a normal `instanceof` check doesn't work properly.
   // See https://github.com/koajs/koa/issues/1466
-  // We can probably remove it once jest fixes https://github.com/facebook/jest/issues/2549.
   const isNativeError =
     Object.prototype.toString.call(err) === "[object Error]" ||
     err instanceof Error;
@@ -99,8 +108,10 @@ function wrapInNativeError(err: any): Error {
   if (typeof err === "object") {
     try {
       errMsg = JSON.stringify(err);
-      // eslint-disable-next-line no-empty
-    } catch (e) {}
+      // oxlint-disable-next-line no-empty
+    } catch (_err) {
+      // Ignore
+    }
   }
   const newError = InternalError(`Non-error thrown: ${errMsg}`);
   // err maybe an object, try to copy the name, message and stack to the new error instance

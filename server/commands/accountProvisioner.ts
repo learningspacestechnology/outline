@@ -1,35 +1,43 @@
-import path from "path";
+import path from "node:path";
 import { readFile } from "fs-extra";
 import invariant from "invariant";
+import { toError, errToString } from "@shared/utils/error";
 import { CollectionPermission, UserRole } from "@shared/types";
-import WelcomeEmail from "@server/emails/templates/WelcomeEmail";
 import env from "@server/env";
 import {
   InvalidAuthenticationError,
   AuthenticationProviderDisabledError,
 } from "@server/errors";
+import Logger from "@server/logging/Logger";
 import { traceFunction } from "@server/logging/tracing";
+import type { User } from "@server/models";
 import {
   AuthenticationProvider,
   Collection,
   Document,
+  Event,
   Team,
-  User,
 } from "@server/models";
+import AuthenticationHelper from "@server/models/helpers/AuthenticationHelper";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { sequelize } from "@server/storage/database";
+import { PluginManager } from "@server/utils/PluginManager";
+import groupsSyncer from "./groupsSyncer";
 import teamProvisioner from "./teamProvisioner";
 import userProvisioner from "./userProvisioner";
+import type { APIContext } from "@server/types";
+import { addSeconds } from "date-fns";
+import { createContext } from "@server/context";
 
 type Props = {
-  /** The IP address of the incoming request */
-  ip: string;
   /** Details of the user logging in from SSO provider */
   user: {
     /** The displayed name of the user */
     name: string;
     /** The email address of the user */
     email: string;
+    /** Whether the provider has verified the user owns the email address */
+    emailVerified?: boolean;
     /** The public url of an image representing the user */
     avatarUrl?: string | null;
     /** The language of the user, if known */
@@ -43,7 +51,7 @@ type Props = {
      */
     teamId?: string;
     /** The displayed name of the team */
-    name: string;
+    name?: string;
     /** The domain name from the email of the user logging in */
     domain?: string;
     /** The preferred subdomain to provision for the team if not yet created */
@@ -80,27 +88,61 @@ export type AccountProvisionerResult = {
   isNewUser: boolean;
 };
 
-async function accountProvisioner({
-  ip,
-  user: userParams,
-  team: teamParams,
-  authenticationProvider: authenticationProviderParams,
-  authentication: authenticationParams,
-}: Props): Promise<AccountProvisionerResult> {
+async function accountProvisioner(
+  ctx: APIContext,
+  {
+    user: userParams,
+    team: teamParams,
+    authenticationProvider: authenticationProviderParams,
+    authentication: authenticationParams,
+  }: Props
+): Promise<AccountProvisionerResult> {
   let result;
   let emailMatchOnly;
 
+  const actor = ctx.state.auth?.user;
+
+  // If the user is already logged in and is an admin of the team then we
+  // allow them to connect a new authentication provider.
+  if (actor && actor.teamId === teamParams.teamId && actor.isAdmin) {
+    const team = actor.team;
+    const authenticationProvider = await AuthenticationProvider.findOne({
+      where: {
+        ...authenticationProviderParams,
+        teamId: team.id,
+      },
+    });
+
+    if (!authenticationProvider) {
+      await team.$create<AuthenticationProvider>(
+        "authenticationProvider",
+        authenticationProviderParams
+      );
+    }
+
+    return {
+      user: actor,
+      team,
+      isNewUser: false,
+      isNewTeam: false,
+    };
+  }
+
   try {
-    result = await teamProvisioner({
+    result = await teamProvisioner(ctx, {
       ...teamParams,
+      name: teamParams.name || "Wiki",
       authenticationProvider: authenticationProviderParams,
-      ip,
     });
   } catch (err) {
     // The account could not be provisioned for the provided teamId
     // check to see if we can try authentication using email matching only
-    if (err.id === "invalid_authentication") {
-      const authenticationProvider = await AuthenticationProvider.findOne({
+    if (
+      err instanceof Error &&
+      "id" in err &&
+      err.id === "invalid_authentication"
+    ) {
+      const authProvider = await AuthenticationProvider.findOne({
         where: {
           name: authenticationProviderParams.name,
           teamId: teamParams.teamId,
@@ -115,21 +157,21 @@ async function accountProvisioner({
         order: [["enabled", "DESC"]],
       });
 
-      if (authenticationProvider) {
+      if (authProvider) {
         emailMatchOnly = true;
         result = {
-          authenticationProvider,
-          team: authenticationProvider.team,
+          authenticationProvider: authProvider,
+          team: authProvider.team,
           isNewTeam: false,
         };
       }
     }
 
     if (!result) {
-      if (err.id) {
+      if (err instanceof Error && "id" in err && err.id) {
         throw err;
       } else {
-        throw InvalidAuthenticationError(err.message);
+        throw InvalidAuthenticationError(errToString(err));
       }
     }
   }
@@ -141,33 +183,34 @@ async function accountProvisioner({
     throw AuthenticationProviderDisabledError();
   }
 
-  result = await userProvisioner({
+  result = await userProvisioner(ctx, {
     name: userParams.name,
     email: userParams.email,
+    emailVerified: userParams.emailVerified,
+    authenticationProviderName: AuthenticationHelper.getProviderName(
+      authenticationProviderParams.name
+    ),
     language: userParams.language,
     role: isNewTeam ? UserRole.Admin : undefined,
     avatarUrl: userParams.avatarUrl,
     teamId: team.id,
-    ip,
     authentication: emailMatchOnly
       ? undefined
       : {
           authenticationProviderId: authenticationProvider.id,
           ...authenticationParams,
           expiresAt: authenticationParams.expiresIn
-            ? new Date(Date.now() + authenticationParams.expiresIn * 1000)
+            ? addSeconds(Date.now(), authenticationParams.expiresIn)
             : undefined,
         },
   });
   const { isNewUser, user } = result;
 
-  // TODO: Move to processor
-  if (isNewUser) {
-    await new WelcomeEmail({
-      to: user.email,
-      role: user.role,
-      teamUrl: team.url,
-    }).schedule();
+  if (isNewUser && user.isInvited) {
+    await Event.createFromContext(ctx, {
+      name: "users.invite_accepted",
+      userId: user.id,
+    });
   }
 
   if (isNewUser || isNewTeam) {
@@ -186,7 +229,48 @@ async function accountProvisioner({
     }
 
     if (provision) {
-      await provisionFirstCollection(team, user);
+      await provisionFirstCollection(ctx, team, user);
+    }
+  }
+
+  // Sync group memberships from the authentication provider if enabled
+  if (authenticationParams.accessToken) {
+    const settings = authenticationProvider.settings;
+
+    if (settings?.groupSyncEnabled) {
+      const syncProvider = PluginManager.getGroupSyncProvider(
+        authenticationProviderParams.name
+      );
+
+      if (syncProvider) {
+        try {
+          const externalGroups = await syncProvider.fetchUserGroups(
+            authenticationParams.accessToken,
+            settings
+          );
+
+          await sequelize.transaction(async (transaction) => {
+            const groupSyncCtx = createContext({
+              user,
+              ip: ctx.context?.ip,
+              transaction,
+            });
+
+            await groupsSyncer(groupSyncCtx, {
+              user,
+              team,
+              authenticationProvider,
+              externalGroups,
+            });
+          });
+        } catch (err) {
+          // Group sync failure should never block login
+          Logger.error("Group sync failed during login", toError(err), {
+            userId: user.id,
+            provider: authenticationProviderParams.name,
+          });
+        }
+      }
     }
   }
 
@@ -198,21 +282,26 @@ async function accountProvisioner({
   };
 }
 
-async function provisionFirstCollection(team: Team, user: User) {
+async function provisionFirstCollection(
+  ctx: APIContext,
+  team: Team,
+  user: User
+) {
   await sequelize.transaction(async (transaction) => {
-    const collection = await Collection.create(
-      {
-        name: "Welcome",
-        description: `This collection is a quick guide to what ${env.APP_NAME} is all about. Feel free to delete this collection once your team is up to speed with the basics!`,
-        teamId: team.id,
-        createdById: user.id,
-        sort: Collection.DEFAULT_SORT,
-        permission: CollectionPermission.ReadWrite,
-      },
-      {
-        transaction,
-      }
-    );
+    const context = createContext({
+      ...ctx,
+      transaction,
+      user,
+    });
+
+    const collection = await Collection.createWithCtx(context, {
+      name: "Welcome",
+      description: `This collection is a quick guide to what ${env.APP_NAME} is all about. Feel free to delete this collection once your team is up to speed with the basics!`,
+      teamId: team.id,
+      createdById: user.id,
+      sort: Collection.DEFAULT_SORT,
+      permission: CollectionPermission.ReadWrite,
+    });
 
     // For the first collection we go ahead and create some initial documents to get
     // the team started. You can edit these in /server/onboarding/x.md
@@ -228,26 +317,23 @@ async function provisionFirstCollection(team: Team, user: User) {
         path.join(process.cwd(), "server", "onboarding", `${title}.md`),
         "utf8"
       );
-      const document = await Document.create(
-        {
-          version: 2,
-          isWelcome: true,
-          parentDocumentId: null,
-          collectionId: collection.id,
-          teamId: collection.teamId,
-          lastModifiedById: collection.createdById,
-          createdById: collection.createdById,
-          title,
-          text,
-        },
-        { transaction }
-      );
+      const document = await Document.createWithCtx(context, {
+        version: 2,
+        isWelcome: true,
+        parentDocumentId: null,
+        collectionId: collection.id,
+        teamId: collection.teamId,
+        lastModifiedById: collection.createdById,
+        createdById: collection.createdById,
+        title,
+        text,
+      });
 
       document.content = await DocumentHelper.toJSON(document);
 
-      await document.publish(user, collection.id, {
+      await document.publish(context, {
+        collectionId: collection.id,
         silent: true,
-        transaction,
       });
     }
   });

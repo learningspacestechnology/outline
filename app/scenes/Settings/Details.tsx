@@ -1,5 +1,5 @@
 import { isHexColor } from "class-validator";
-import pickBy from "lodash/pickBy";
+import { pickBy } from "es-toolkit/compat";
 import { observer } from "mobx-react";
 import { TeamIcon } from "outline-icons";
 import { useRef, useState } from "react";
@@ -7,16 +7,20 @@ import * as React from "react";
 import { useTranslation, Trans } from "react-i18next";
 import { toast } from "sonner";
 import { ThemeProvider, useTheme } from "styled-components";
+import { errToString } from "@shared/utils/error";
 import { buildDarkTheme, buildLightTheme } from "@shared/styles/theme";
-import { CustomTheme, TOCPosition, TeamPreference } from "@shared/types";
+import type { CustomTheme } from "@shared/types";
+import { TOCPosition, TeamPreference } from "@shared/types";
 import { getBaseDomain } from "@shared/utils/domains";
+import { TeamValidation } from "@shared/validations";
 import Button from "~/components/Button";
 import ButtonLink from "~/components/ButtonLink";
 import DefaultCollectionInputSelect from "~/components/DefaultCollectionInputSelect";
 import Heading from "~/components/Heading";
 import Input from "~/components/Input";
 import InputColor from "~/components/InputColor";
-import { InputSelectNew, Option } from "~/components/InputSelectNew";
+import type { Option } from "~/components/InputSelect";
+import { InputSelect } from "~/components/InputSelect";
 import Scene from "~/components/Scene";
 import Switch from "~/components/Switch";
 import Text from "~/components/Text";
@@ -44,6 +48,7 @@ function Details() {
     team.preferences?.customTheme?.accentText
   );
   const [name, setName] = useState(team.name);
+  const [description, setDescription] = useState(team.description || "");
   const [subdomain, setSubdomain] = useState(team.subdomain);
   const [publicBranding, setPublicBranding] = useState(
     team.preferences?.publicBranding
@@ -94,6 +99,7 @@ function Details() {
       try {
         await team.save({
           name,
+          description,
           subdomain,
           defaultCollectionId,
           preferences: {
@@ -105,10 +111,20 @@ function Details() {
         });
         toast.success(t("Settings saved"));
       } catch (err) {
-        toast.error(err.message);
+        toast.error(errToString(err));
       }
     },
-    [team, name, subdomain, defaultCollectionId, publicBranding, customTheme, t]
+    [
+      tocPosition,
+      team,
+      name,
+      description,
+      subdomain,
+      defaultCollectionId,
+      publicBranding,
+      customTheme,
+      t,
+    ]
   );
 
   const handleNameChange = React.useCallback(
@@ -149,6 +165,15 @@ function Details() {
     setDefaultCollectionId(selectedValue);
   }, []);
 
+  const handleSeamlessEditChange = React.useCallback(
+    async (checked: boolean) => {
+      team.setPreference(TeamPreference.SeamlessEdit, !checked);
+      await team.save();
+      toast.success(t("Settings saved"));
+    },
+    [team, t]
+  );
+
   const isValid = form.current?.checkValidity();
 
   const newTheme = React.useMemo(
@@ -180,6 +205,7 @@ function Details() {
             )}
           >
             <ImageInput
+              alt={t("Workspace logo")}
               onSuccess={handleAvatarChange}
               onError={handleAvatarError}
               model={team}
@@ -198,7 +224,24 @@ function Details() {
               autoComplete="organization"
               value={name}
               onChange={handleNameChange}
+              maxLength={TeamValidation.maxNameLength}
+              showCharacterCount
               required
+            />
+          </SettingRow>
+          <SettingRow
+            label={t("Description")}
+            name="description"
+            description={t("A short description of your workspace.")}
+          >
+            <Input
+              id="description"
+              value={description}
+              onChange={(ev: React.ChangeEvent<HTMLInputElement>) => {
+                setDescription(ev.target.value);
+              }}
+              maxLength={TeamValidation.maxDescriptionLength}
+              showCharacterCount
             />
           </SettingRow>
           <SettingRow
@@ -237,21 +280,19 @@ function Details() {
               flex
             />
           </SettingRow>
-          {team.avatarUrl && (
+          {(team.avatarUrl || team.description) && (
             <SettingRow
               name={TeamPreference.PublicBranding}
               label={t("Public branding")}
               description={t(
-                "Show your team’s logo on public pages like login and shared documents."
+                "Show your workspace logo, description, and branding on publicly shared pages."
               )}
             >
               <Switch
                 id={TeamPreference.PublicBranding}
                 name={TeamPreference.PublicBranding}
                 checked={publicBranding}
-                onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                  setPublicBranding(event.target.checked)
-                }
+                onChange={(checked: boolean) => setPublicBranding(checked)}
               />
             </SettingRow>
           )}
@@ -263,13 +304,12 @@ function Details() {
               "The side to display the table of contents in relation to the main content."
             )}
           >
-            <InputSelectNew
+            <InputSelect
               options={tocPositionOptions}
               value={tocPosition}
               onChange={handleTocPositionChange}
-              ariaLabel={t("Table of contents position")}
               label={t("Table of contents position")}
-              hideLabel
+              labelHidden
             />
           </SettingRow>
 
@@ -299,12 +339,15 @@ function Details() {
               value={subdomain || ""}
               onChange={handleSubdomainChange}
               autoComplete="off"
-              minLength={4}
-              maxLength={32}
+              minLength={TeamValidation.minSubdomainLength}
+              maxLength={
+                isCloudHosted
+                  ? TeamValidation.maxSubdomainLength
+                  : TeamValidation.maxSubdomainSelfHostedLength
+              }
             />
           </SettingRow>
           <SettingRow
-            border={false}
             label={t("Start view")}
             name="defaultCollectionId"
             description={t(
@@ -314,6 +357,21 @@ function Details() {
             <DefaultCollectionInputSelect
               onSelectCollection={onSelectCollection}
               defaultCollectionId={defaultCollectionId}
+            />
+          </SettingRow>
+          <SettingRow
+            border={false}
+            name={TeamPreference.SeamlessEdit}
+            label={t("Separate editing")}
+            description={t(
+              "When enabled documents have a separate editing mode by default instead of being always editable. This setting can be overridden by user preferences."
+            )}
+          >
+            <Switch
+              id={TeamPreference.SeamlessEdit}
+              name={TeamPreference.SeamlessEdit}
+              checked={!team.getPreference(TeamPreference.SeamlessEdit)}
+              onChange={handleSeamlessEditChange}
             />
           </SettingRow>
 

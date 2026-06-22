@@ -1,8 +1,9 @@
-import isArray from "lodash/isArray";
-import sortBy from "lodash/sortBy";
+import { isArray, sortBy } from "es-toolkit/compat";
 import { action, observable } from "mobx";
-import Team from "~/models/Team";
-import User from "~/models/User";
+import type { IObservableArray } from "mobx";
+import type Team from "~/models/Team";
+import type User from "~/models/User";
+import type { LazyComponent } from "~/components/LazyLoad";
 import { useComputed } from "~/hooks/useComputed";
 import Logger from "./Logger";
 import isCloudHosted from "./isCloudHosted";
@@ -27,8 +28,10 @@ type PluginValueMap = {
     after?: string;
     /** The displayed icon of the plugin. */
     icon: React.ElementType;
-    /** The settings screen somponent, should be lazy loaded. */
-    component: React.LazyExoticComponent<React.ComponentType>;
+    /** The lazy loaded settings screen component. */
+    component: LazyComponent<React.ComponentType>;
+    /** The description that will show on the plugins card. */
+    description?: string;
     /** Whether the plugin is enabled in the current context. */
     enabled?: (team: Team, user: User) => boolean;
   };
@@ -92,7 +95,7 @@ export class PluginManager {
     }
 
     if (!this.plugins.has(plugin.type)) {
-      this.plugins.set(plugin.type, observable.array([]));
+      this.plugins.set(plugin.type, observable.array([], { deep: false }));
     }
 
     this.plugins
@@ -114,7 +117,8 @@ export class PluginManager {
    * @returns A list of plugins
    */
   public static getHooks<T extends Hook>(type: T) {
-    return sortBy(this.plugins.get(type) || [], "priority") as Plugin<T>[];
+    const plugins = this.plugins.get(type) ?? [];
+    return sortBy([...plugins], "priority") as Plugin<T>[];
   }
 
   /**
@@ -143,7 +147,17 @@ export class PluginManager {
     this.loaded = true;
   }
 
-  private static plugins = observable.map<Hook, Plugin<Hook>[]>();
+  /**
+   * Whether all plugin client modules have finished loading.
+   */
+  public static get isLoaded(): boolean {
+    return this.loaded;
+  }
+
+  private static plugins = observable.map<
+    Hook,
+    IObservableArray<Plugin<Hook>>
+  >();
 
   @observable
   private static loaded = false;

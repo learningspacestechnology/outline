@@ -1,7 +1,9 @@
 import * as React from "react";
 import { toast } from "sonner";
 import styled from "styled-components";
-import { s } from "@shared/styles";
+import { errToString } from "@shared/utils/error";
+import { s, ellipsis } from "@shared/styles";
+import EventBoundary from "@shared/components/EventBoundary";
 
 type Props = Omit<React.HTMLAttributes<HTMLInputElement>, "onSubmit"> & {
   /** A callback when the title is submitted. */
@@ -32,6 +34,7 @@ function EditableTitle(
   const [isEditing, setIsEditing] = React.useState(rest.isEditing || false);
   const [originalValue, setOriginalValue] = React.useState(title);
   const [value, setValue] = React.useState(title);
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
 
   React.useImperativeHandle(ref, () => ({
     setIsEditing,
@@ -41,52 +44,83 @@ function EditableTitle(
     setValue(title);
   }, [title]);
 
-  const handleChange = React.useCallback((event) => {
-    setValue(event.target.value);
-  }, []);
+  const handleChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setValue(event.target.value);
+    },
+    []
+  );
 
-  const handleDoubleClick = React.useCallback((event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setIsEditing(true);
-  }, []);
+  const handleDoubleClick = React.useCallback(
+    (event: React.MouseEvent<HTMLSpanElement>) => {
+      if (event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      setIsEditing(true);
+    },
+    []
+  );
 
-  const stopPropagation = React.useCallback((event) => {
-    event.preventDefault();
-    event.stopPropagation();
-  }, []);
+  const stopPropagation = React.useCallback(
+    (event: React.MouseEvent<HTMLSpanElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    []
+  );
 
-  const handleFocus = React.useCallback((event) => {
-    event.target.select();
-  }, []);
+  const handleFocus = React.useCallback(
+    (event: React.FocusEvent<HTMLInputElement>) => {
+      event.target.select();
+    },
+    []
+  );
 
   const handleSave = React.useCallback(
-    async (ev) => {
+    async (
+      ev:
+        | React.FocusEvent<HTMLInputElement>
+        | React.KeyboardEvent<HTMLInputElement>
+        | React.FormEvent<HTMLFormElement>
+    ) => {
       ev.preventDefault();
       ev.stopPropagation();
-      setIsEditing(false);
+
+      if (isSubmitting) {
+        return;
+      }
+
       const trimmedValue = value.trim();
 
       if (trimmedValue === originalValue || trimmedValue.length === 0) {
         setValue(originalValue);
+        setIsEditing(false);
         onCancel?.();
         return;
       }
 
+      setIsSubmitting(true);
       try {
         await onSubmit(trimmedValue);
         setOriginalValue(trimmedValue);
+        setIsEditing(false);
       } catch (error) {
-        setValue(originalValue);
-        toast.error(error.message);
+        setValue(value);
+        setIsEditing(true);
+
+        toast.error(errToString(error));
         throw error;
+      } finally {
+        setIsSubmitting(false);
       }
     },
-    [originalValue, value, onCancel, onSubmit]
+    [originalValue, value, onCancel, onSubmit, isSubmitting]
   );
 
   const handleKeyDown = React.useCallback(
-    async (ev) => {
+    async (ev: React.KeyboardEvent<HTMLInputElement>) => {
       if (ev.nativeEvent.isComposing) {
         return;
       }
@@ -109,11 +143,12 @@ function EditableTitle(
   return (
     <>
       {isEditing ? (
-        <form onSubmit={handleSave}>
+        <EventBoundary as="form" onSubmit={handleSave}>
           <Input
             dir="auto"
             type="text"
             lang=""
+            name="title"
             value={value}
             onClick={stopPropagation}
             onKeyDown={handleKeyDown}
@@ -123,18 +158,22 @@ function EditableTitle(
             autoFocus
             {...rest}
           />
-        </form>
+        </EventBoundary>
       ) : (
-        <span
+        <Text
           onDoubleClick={canUpdate ? handleDoubleClick : undefined}
           className={rest.className}
         >
           {value}
-        </span>
+        </Text>
       )}
     </>
   );
 }
+
+const Text = styled.div`
+  ${ellipsis()}
+`;
 
 const Input = styled.input`
   color: ${s("text")};

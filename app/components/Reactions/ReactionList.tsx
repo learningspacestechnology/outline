@@ -1,7 +1,7 @@
-import compact from "lodash/compact";
+import { compact } from "es-toolkit/compat";
 import { observer } from "mobx-react";
-import React from "react";
-import Comment from "~/models/Comment";
+import * as React from "react";
+import type Comment from "~/models/Comment";
 import useHover from "~/hooks/useHover";
 import useStores from "~/hooks/useStores";
 import Logger from "~/utils/Logger";
@@ -41,7 +41,7 @@ const ReactionList: React.FC<Props> = ({
     const loadReactedUsersData = async () => {
       try {
         await model.loadReactedUsersData();
-      } catch (err) {
+      } catch (_err) {
         Logger.warn("Could not prefetch reaction data");
       }
     };

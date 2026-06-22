@@ -1,8 +1,9 @@
 import { t } from "i18next";
 import Router from "koa-router";
-import escapeRegExp from "lodash/escapeRegExp";
+import { escapeRegExp } from "es-toolkit/compat";
 import queryString from "query-string";
 import { z } from "zod";
+import { toError } from "@shared/utils/error";
 import { IntegrationService, IntegrationType } from "@shared/types";
 import parseDocumentSlug from "@shared/utils/parseDocumentSlug";
 import {
@@ -23,9 +24,9 @@ import {
   AuthenticationProvider,
   Comment,
 } from "@server/models";
-import SearchHelper from "@server/models/helpers/SearchHelper";
+import SearchProviderManager from "@server/utils/SearchProviderManager";
 import { can } from "@server/policies";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
 import { safeEqual } from "@server/utils/crypto";
 import { opts } from "@server/utils/i18n";
 import env from "../env";
@@ -96,7 +97,7 @@ router.post(
 
           if (commentId) {
             const comment = await Comment.findByPk(commentId as string);
-            if (!comment) {
+            if (!comment || comment.documentId !== doc.id) {
               continue;
             }
 
@@ -155,7 +156,7 @@ router.post(
       callback_id = parsed.callback_id;
       token = parsed.token;
     } catch (err) {
-      Logger.error("Failed to parse Slack interactive payload", err, {
+      Logger.error("Failed to parse Slack interactive payload", toError(err), {
         payload,
       });
       throw ValidationError("Invalid payload");
@@ -164,9 +165,8 @@ router.post(
     verifySlackToken(token);
 
     // we find the document based on the users teamId to ensure access
-    const document = await Document.scope("withCollection").findByPk(
-      callback_id
-    );
+    const document =
+      await Document.scope("withCollection").findByPk(callback_id);
 
     if (!document) {
       throw InvalidRequestError("Invalid callback_id");
@@ -239,7 +239,8 @@ router.post(
       return;
     }
 
-    const { results, total } = await SearchHelper.searchForUser(user, options);
+    const { results, total } =
+      await SearchProviderManager.getProvider().searchForUser(user, options);
 
     await SearchQuery.create({
       userId: user ? user.id : null,
@@ -403,28 +404,41 @@ async function findUserForRequest(
     return integration.user;
   }
 
-  // Fallback to authentication provider if the user has Slack sign-in
-  const user = await User.findOne({
+  // Fallback to authentication provider if the user has Slack sign-in.
+  // Scoped via AuthenticationProvider to the matching Slack workspace so a
+  // colliding providerId from another team/provider cannot resolve.
+  const authentication = await UserAuthentication.findOne({
+    where: {
+      providerId: serviceUserId,
+    },
+    order: [["createdAt", "DESC"]],
     include: [
       {
-        where: {
-          providerId: serviceUserId,
-        },
-        order: [["createdAt", "DESC"]],
-        model: UserAuthentication,
-        as: "authentications",
+        model: AuthenticationProvider,
+        as: "authenticationProvider",
         required: true,
+        where: {
+          name: "slack",
+          providerId: serviceTeamId,
+        },
       },
       {
-        model: Team,
-        as: "team",
+        model: User,
+        as: "user",
         required: true,
+        include: [
+          {
+            model: Team,
+            as: "team",
+            required: true,
+          },
+        ],
       },
     ],
   });
 
-  if (user) {
-    return user;
+  if (authentication?.user) {
+    return authentication.user;
   }
 
   return;

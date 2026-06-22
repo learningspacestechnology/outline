@@ -1,4 +1,4 @@
-import orderBy from "lodash/orderBy";
+import { orderBy } from "es-toolkit/compat";
 import { observer } from "mobx-react";
 import { NewDocumentIcon } from "outline-icons";
 import * as React from "react";
@@ -6,7 +6,7 @@ import { useTranslation, Trans } from "react-i18next";
 import { Pagination } from "@shared/constants";
 import { FileOperationType } from "@shared/types";
 import { cdnPath } from "@shared/utils/urls";
-import FileOperation from "~/models/FileOperation";
+import type FileOperation from "~/models/FileOperation";
 import ImportModel from "~/models/Import";
 import Button from "~/components/Button";
 import Heading from "~/components/Heading";
@@ -96,7 +96,7 @@ function useImportsConfig() {
     items.push({
       title: "Confluence",
       subtitle: t("Import pages from a Confluence instance"),
-      icon: <img src={cdnPath("/images/confluence.png")} width={28} />,
+      icon: <img src={cdnPath("/images/confluence.png")} alt="" width={28} />,
       action: (
         <Button type="submit" disabled neutral>
           {t("Enterprise")}
@@ -183,7 +183,7 @@ function Import() {
         ))}
       </div>
       <br />
-      <PaginatedList
+      <PaginatedList<ImportModel | FileOperation>
         items={allImports}
         fetch={fetchImports}
         heading={
@@ -191,7 +191,7 @@ function Import() {
             <Trans>Recent imports</Trans>
           </h2>
         }
-        renderItem={(item: ImportModel | FileOperation) =>
+        renderItem={(item) =>
           item instanceof ImportModel ? (
             <ImportListItem key={item.id} importModel={item} />
           ) : (

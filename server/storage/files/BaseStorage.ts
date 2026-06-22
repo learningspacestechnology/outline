@@ -1,19 +1,31 @@
-import { Blob } from "buffer";
-import { Readable } from "stream";
-import { PresignedPost } from "@aws-sdk/s3-presigned-post";
+import type { Blob } from "node:buffer";
+import type { Readable } from "node:stream";
+import type { PresignedPost } from "@aws-sdk/s3-presigned-post";
+import { omit } from "es-toolkit/compat";
+import { toError, errToString } from "@shared/utils/error";
 import FileHelper from "@shared/editor/lib/FileHelper";
 import { isBase64Url, isInternalUrl } from "@shared/utils/urls";
+import { Week } from "@shared/utils/time";
 import env from "@server/env";
 import Logger from "@server/logging/Logger";
-import fetch, { chromeUserAgent, RequestInit } from "@server/utils/fetch";
+import type { RequestInit } from "@server/utils/fetch";
+import fetch, { chromeUserAgent, Headers } from "@server/utils/fetch";
+import type { AppContext } from "@server/types";
 
 export default abstract class BaseStorage {
   /** The default number of seconds until a signed URL expires. */
-  public static defaultSignedUrlExpires = 60;
+  public static defaultSignedUrlExpires = 300;
+
+  /**
+   * The maximum number of seconds until a signed URL expires for S3 Signature V4.
+   * AWS S3 Signature V4 presigned URLs must have an expiration date less than one week in the future.
+   */
+  public static maxSignedUrlExpires = Week.seconds;
 
   /**
    * Returns a presigned post for uploading files to the storage provider.
    *
+   * @param ctx The request context
    * @param key The path to store the file at
    * @param acl The ACL to use
    * @param maxUploadSize The maximum upload size in bytes
@@ -21,6 +33,7 @@ export default abstract class BaseStorage {
    * @returns The presigned post object to use on the client (TODO: Abstract away from S3)
    */
   public abstract getPresignedPost(
+    ctx: AppContext,
     key: string,
     acl: string,
     maxUploadSize: number,
@@ -160,8 +173,29 @@ export default abstract class BaseStorage {
     if (match) {
       contentType = match[1];
       buffer = Buffer.from(match[2], "base64");
+
+      // Validate size for base64 URLs, same as for remote URLs
+      const maxSize = Math.min(
+        options?.maxUploadSize ?? Infinity,
+        env.FILE_STORAGE_UPLOAD_MAX_SIZE
+      );
+
+      if (buffer.byteLength > maxSize) {
+        Logger.warn("Base64 URL exceeds size limit", {
+          size: buffer.byteLength,
+          maxSize,
+          key,
+        });
+        return;
+      }
     } else {
       try {
+        const headers = new Headers(init?.headers);
+        if (!headers.has("User-Agent")) {
+          headers.set("User-Agent", chromeUserAgent);
+        }
+        const initWithoutHeaders = omit(init, ["headers"]);
+
         const res = await fetch(url, {
           follow: 3,
           redirect: "follow",
@@ -169,11 +203,9 @@ export default abstract class BaseStorage {
             options?.maxUploadSize ?? Infinity,
             env.FILE_STORAGE_UPLOAD_MAX_SIZE
           ),
-          headers: {
-            "User-Agent": chromeUserAgent,
-          },
+          headers,
           timeout: 10000,
-          ...init,
+          ...initWithoutHeaders,
         });
 
         if (!res.ok) {
@@ -186,7 +218,7 @@ export default abstract class BaseStorage {
           res.headers.get("content-type") ?? "application/octet-stream";
       } catch (err) {
         Logger.warn("Error fetching URL to upload", {
-          error: err.message,
+          error: errToString(err),
           url,
           key,
           acl,
@@ -216,7 +248,7 @@ export default abstract class BaseStorage {
           }
         : undefined;
     } catch (err) {
-      Logger.error("Error uploading to file storage from URL", err, {
+      Logger.error("Error uploading to file storage from URL", toError(err), {
         url,
         key,
         acl,
@@ -224,6 +256,10 @@ export default abstract class BaseStorage {
       return;
     }
   }
+
+  public abstract getFileExists(key: string): Promise<boolean>;
+
+  public abstract moveFile(fromKey: string, toKey: string): Promise<void>;
 
   /**
    * Delete a file from the storage provider.

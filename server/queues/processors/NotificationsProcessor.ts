@@ -1,4 +1,5 @@
-import {
+import type {
+  AccessRequestEvent,
   CollectionEvent,
   RevisionEvent,
   Event,
@@ -7,15 +8,20 @@ import {
   CollectionUserEvent,
   DocumentUserEvent,
   DocumentGroupEvent,
+  CommentReactionEvent,
 } from "@server/types";
 import CollectionAddUserNotificationsTask from "../tasks/CollectionAddUserNotificationsTask";
 import CollectionCreatedNotificationsTask from "../tasks/CollectionCreatedNotificationsTask";
 import CommentCreatedNotificationsTask from "../tasks/CommentCreatedNotificationsTask";
 import CommentUpdatedNotificationsTask from "../tasks/CommentUpdatedNotificationsTask";
+import ReactionCreatedNotificationsTask from "../tasks/ReactionCreatedNotificationsTask";
+import ReactionRemovedNotificationsTask from "../tasks/ReactionRemovedNotificationsTask";
+import DocumentAccessRequestNotificationsTask from "../tasks/DocumentAccessRequestNotificationsTask";
 import DocumentAddGroupNotificationsTask from "../tasks/DocumentAddGroupNotificationsTask";
 import DocumentAddUserNotificationsTask from "../tasks/DocumentAddUserNotificationsTask";
 import DocumentPublishedNotificationsTask from "../tasks/DocumentPublishedNotificationsTask";
 import RevisionCreatedNotificationsTask from "../tasks/RevisionCreatedNotificationsTask";
+import ShareSubscriptionNotificationsTask from "../tasks/ShareSubscriptionNotificationsTask";
 import BaseProcessor from "./BaseProcessor";
 
 export default class NotificationsProcessor extends BaseProcessor {
@@ -23,11 +29,14 @@ export default class NotificationsProcessor extends BaseProcessor {
     "documents.publish",
     "documents.add_user",
     "documents.add_group",
+    "access_requests.create",
     "revisions.create",
     "collections.create",
     "collections.add_user",
     "comments.create",
     "comments.update",
+    "comments.add_reaction",
+    "comments.remove_reaction",
   ];
 
   async perform(event: Event) {
@@ -38,6 +47,8 @@ export default class NotificationsProcessor extends BaseProcessor {
         return this.documentAddUser(event);
       case "documents.add_group":
         return this.documentAddGroup(event);
+      case "access_requests.create":
+        return this.documentAccessRequest(event);
       case "revisions.create":
         return this.revisionCreated(event);
       case "collections.create":
@@ -48,52 +59,56 @@ export default class NotificationsProcessor extends BaseProcessor {
         return this.commentCreated(event);
       case "comments.update":
         return this.commentUpdated(event);
+      case "comments.add_reaction":
+        return this.reactionCreated(event);
+      case "comments.remove_reaction":
+        return this.reactionRemoved(event);
       default:
     }
   }
 
   async documentPublished(event: DocumentEvent) {
     // never send notifications when batch importing
-    if (
-      "data" in event &&
-      "source" in event.data &&
-      event.data.source === "import"
-    ) {
+    if (event.name === "documents.publish" && event.data?.source === "import") {
       return;
     }
 
-    await DocumentPublishedNotificationsTask.schedule(event);
+    await new DocumentPublishedNotificationsTask().schedule(event);
   }
 
   async documentAddUser(event: DocumentUserEvent) {
     if (!event.data.isNew || event.userId === event.actorId) {
       return;
     }
-    await DocumentAddUserNotificationsTask.schedule(event);
+    await new DocumentAddUserNotificationsTask().schedule(event);
   }
 
   async documentAddGroup(event: DocumentGroupEvent) {
     if (!event.data.isNew) {
       return;
     }
-    await DocumentAddGroupNotificationsTask.schedule(event);
+    await new DocumentAddGroupNotificationsTask().schedule(event);
+  }
+
+  async documentAccessRequest(event: AccessRequestEvent) {
+    await new DocumentAccessRequestNotificationsTask().schedule(event);
   }
 
   async revisionCreated(event: RevisionEvent) {
-    await RevisionCreatedNotificationsTask.schedule(event);
+    await new RevisionCreatedNotificationsTask().schedule(event);
+    await new ShareSubscriptionNotificationsTask().schedule(event);
   }
 
   async collectionCreated(event: CollectionEvent) {
     // never send notifications when batch importing
     if (
-      "data" in event &&
-      "source" in event.data &&
-      event.data.source === "import"
+      !!event.changes?.attributes.apiImportId ||
+      !!event.changes?.attributes.importId
     ) {
       return;
     }
 
-    await CollectionCreatedNotificationsTask.schedule(event);
+    await new CollectionCreatedNotificationsTask().schedule(event);
   }
 
   async collectionAddUser(event: CollectionUserEvent) {
@@ -101,14 +116,22 @@ export default class NotificationsProcessor extends BaseProcessor {
       return;
     }
 
-    await CollectionAddUserNotificationsTask.schedule(event);
+    await new CollectionAddUserNotificationsTask().schedule(event);
   }
 
   async commentCreated(event: CommentEvent) {
-    await CommentCreatedNotificationsTask.schedule(event);
+    await new CommentCreatedNotificationsTask().schedule(event);
   }
 
   async commentUpdated(event: CommentEvent) {
-    await CommentUpdatedNotificationsTask.schedule(event);
+    await new CommentUpdatedNotificationsTask().schedule(event);
+  }
+
+  async reactionCreated(event: CommentReactionEvent) {
+    await new ReactionCreatedNotificationsTask().schedule(event);
+  }
+
+  async reactionRemoved(event: CommentReactionEvent) {
+    await new ReactionRemovedNotificationsTask().schedule(event);
   }
 }

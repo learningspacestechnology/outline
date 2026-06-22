@@ -4,41 +4,146 @@ import {
   type OAuthWebFlowAuthOptions,
   type InstallationAuthOptions,
 } from "@octokit/auth-app";
+import { Sequelize } from "sequelize";
+import type { Endpoints, OctokitResponse } from "@octokit/types";
 import { Octokit } from "octokit";
 import pluralize from "pluralize";
-import {
-  IntegrationService,
-  IntegrationType,
-  JSONObject,
-  UnfurlResourceType,
-} from "@shared/types";
+import { toError, errToString } from "@shared/utils/error";
+import type { IntegrationType } from "@shared/types";
+import { IntegrationService, UnfurlResourceType } from "@shared/types";
 import Logger from "@server/logging/Logger";
-import { Integration, User } from "@server/models";
-import { UnfurlSignature } from "@server/types";
+import type { User } from "@server/models";
+import { Integration } from "@server/models";
+import type {
+  UnfurlIssueOrPR,
+  UnfurlProject,
+  UnfurlSignature,
+} from "@server/types";
+import { GitHubUtils } from "../shared/GitHubUtils";
 import env from "./env";
 
+type PR =
+  Endpoints["GET /repos/{owner}/{repo}/pulls/{pull_number}"]["response"]["data"];
+type Issue =
+  Endpoints["GET /repos/{owner}/{repo}/issues/{issue_number}"]["response"]["data"];
+type Installation =
+  Endpoints["GET /app/installations/{installation_id}"]["response"]["data"];
+
+type ParsedIssueOrPR = {
+  owner: string;
+  repo: string;
+  type: UnfurlResourceType.Issue | UnfurlResourceType.PR;
+  id: number;
+  url: string;
+};
+
+type ParsedProject = {
+  owner: string;
+  ownerType: "orgs" | "users";
+  type: UnfurlResourceType.Project;
+  projectNumber: number;
+  url: string;
+};
+
+type GitHubResource = ParsedIssueOrPR | ParsedProject;
+
+type GitHubProject = {
+  number: number;
+  title: string;
+  description: string | null;
+  url: string;
+  createdAt: string;
+  closed: boolean;
+};
+
 const requestPlugin = (octokit: Octokit) => ({
-  requestPR: async (params: ReturnType<typeof GitHub.parseUrl>) =>
-    octokit.request(`GET /repos/{owner}/{repo}/pulls/{id}`, {
-      owner: params?.owner,
-      repo: params?.repo,
-      id: params?.id,
+  requestRepos: () =>
+    octokit.paginate.iterator(
+      octokit.rest.apps.listReposAccessibleToInstallation,
+      {
+        headers: {
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      }
+    ),
+
+  requestPR: async (params: ParsedIssueOrPR) =>
+    octokit.request(`GET /repos/{owner}/{repo}/pulls/{pull_number}`, {
+      owner: params.owner,
+      repo: params.repo,
+      pull_number: params.id,
       headers: {
         Accept: "application/vnd.github.text+json",
         "X-GitHub-Api-Version": "2022-11-28",
       },
     }),
 
-  requestIssue: async (params: ReturnType<typeof GitHub.parseUrl>) =>
-    octokit.request(`GET /repos/{owner}/{repo}/issues/{id}`, {
-      owner: params?.owner,
-      repo: params?.repo,
-      id: params?.id,
+  requestIssue: async (params: ParsedIssueOrPR) =>
+    octokit.request(`GET /repos/{owner}/{repo}/issues/{issue_number}`, {
+      owner: params.owner,
+      repo: params.repo,
+      issue_number: params.id,
       headers: {
         Accept: "application/vnd.github.text+json",
         "X-GitHub-Api-Version": "2022-11-28",
       },
     }),
+
+  /**
+   * Fetches details of a GitHub ProjectV2 using the GraphQL API.
+   *
+   * @param params Parsed project URL identifiers.
+   * @returns Project data or undefined if not found.
+   */
+  requestProject: async (
+    params: ParsedProject
+  ): Promise<GitHubProject | undefined> => {
+    const ownerField = params.ownerType === "orgs" ? "organization" : "user";
+
+    const query = `query($login: String!, $number: Int!) {
+      ${ownerField}(login: $login) {
+        projectV2(number: $number) {
+          number
+          title
+          shortDescription
+          url
+          createdAt
+          closed
+        }
+      }
+    }`;
+
+    const result = await octokit.graphql<
+      Record<
+        string,
+        {
+          projectV2: {
+            number: number;
+            title: string;
+            shortDescription: string | null;
+            url: string;
+            createdAt: string;
+            closed: boolean;
+          } | null;
+        }
+      >
+    >(query, { login: params.owner, number: params.projectNumber });
+
+    const project = result[ownerField]?.projectV2;
+    if (!project) {
+      return undefined;
+    }
+
+    return {
+      number: project.number,
+      title: project.title,
+      description: project.shortDescription,
+      url: project.url,
+      createdAt: project.createdAt,
+      closed: project.closed,
+    };
+  },
 
   /**
    * Fetches app installations accessible to the user
@@ -55,17 +160,34 @@ const requestPlugin = (octokit: Octokit) => ({
    * @returns Response containing resource details
    */
   requestResource: async function requestResource(
-    resource: ReturnType<typeof GitHub.parseUrl>
-  ): Promise<{ data?: JSONObject }> {
+    resource: GitHubResource | undefined
+  ): Promise<OctokitResponse<Issue | PR> | undefined> {
     switch (resource?.type) {
       case UnfurlResourceType.PR:
-        return this.requestPR(resource);
+        return this.requestPR(resource) as Promise<OctokitResponse<PR>>;
       case UnfurlResourceType.Issue:
-        return this.requestIssue(resource);
+        return this.requestIssue(resource) as Promise<OctokitResponse<Issue>>;
       default:
-        return { data: undefined };
+        return;
     }
   },
+
+  /**
+   * Fetches details of a specific GitHub app installation
+   *
+   * @param installationId Id of the installation to fetch
+   * @returns Response containing installation details
+   */
+  requestAppInstallation: async (
+    installationId: number
+  ): Promise<OctokitResponse<Installation>> =>
+    octokit.request("GET /app/installations/{installation_id}", {
+      installation_id: installationId,
+      headers: {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    }),
 
   /**
    * Uninstalls the GitHub app from a given target
@@ -91,7 +213,10 @@ export class GitHub {
 
   private static appOctokit: Octokit;
 
-  private static supportedResources = Object.values(UnfurlResourceType);
+  private static supportedResources = [
+    UnfurlResourceType.Issue,
+    UnfurlResourceType.PR,
+  ];
 
   /**
    * Parses a given URL and returns resource identifiers for GitHub specific URLs
@@ -99,25 +224,59 @@ export class GitHub {
    * @param url URL to parse
    * @returns {object} Containing resource identifiers - `owner`, `repo`, `type` and `id`.
    */
-  public static parseUrl(url: string) {
-    const { hostname, pathname } = new URL(url);
-    if (hostname !== "github.com") {
+  public static parseUrl(url: string): GitHubResource | undefined {
+    try {
+      const { hostname, pathname } = new URL(url);
+      if (hostname !== "github.com") {
+        return;
+      }
+
+      const parts = pathname.split("/");
+
+      // Handle project URLs: /orgs/{org}/projects/{number} or /users/{user}/projects/{number}
+      if (
+        (parts[1] === "orgs" || parts[1] === "users") &&
+        parts[3] === "projects"
+      ) {
+        const ownerType = parts[1] as "orgs" | "users";
+        const owner = parts[2];
+        const projectNumber = Number(parts[4]);
+
+        if (!owner || isNaN(projectNumber)) {
+          return;
+        }
+
+        return {
+          owner,
+          ownerType,
+          type: UnfurlResourceType.Project,
+          projectNumber,
+          url,
+        };
+      }
+
+      const owner = parts[1];
+      const repo = parts[2];
+      const type = parts[3]
+        ? (pluralize.singular(parts[3]) as UnfurlResourceType)
+        : undefined;
+      const id = Number(parts[4]);
+
+      if (!type || !GitHub.supportedResources.includes(type) || isNaN(id)) {
+        return;
+      }
+
+      return {
+        owner,
+        repo,
+        type: type as UnfurlResourceType.Issue | UnfurlResourceType.PR,
+        id,
+        url,
+      };
+    } catch (_err) {
+      // Invalid URL format
       return;
     }
-
-    const parts = pathname.split("/");
-    const owner = parts[1];
-    const repo = parts[2];
-    const type = parts[3]
-      ? (pluralize.singular(parts[3]) as UnfurlResourceType)
-      : undefined;
-    const id = parts[4];
-
-    if (!type || !GitHub.supportedResources.includes(type)) {
-      return;
-    }
-
-    return { owner, repo, type, id, url };
   }
 
   private static authenticateAsApp = () => {
@@ -181,18 +340,29 @@ export class GitHub {
    * @param actor User attempting to unfurl resource url
    * @returns An object containing resource details e.g, a GitHub Pull Request details
    */
-  public static unfurl: UnfurlSignature = async (url: string, actor: User) => {
+  public static unfurl: UnfurlSignature = async (url: string, actor?: User) => {
     const resource = GitHub.parseUrl(url);
 
-    if (!resource) {
+    if (!resource || !actor) {
       return;
     }
 
+    // Find integration, prioritizing one where the installation account matches the resource owner
     const integration = (await Integration.findOne({
       where: {
         service: IntegrationService.GitHub,
         teamId: actor.teamId,
-        "settings.github.installation.account.name": resource.owner,
+      },
+      order: [
+        [
+          Sequelize.literal(
+            `CASE WHEN "settings"->'github'->'installation'->'account'->>'name' = :owner THEN 0 ELSE 1 END`
+          ),
+          "ASC",
+        ],
+      ],
+      replacements: {
+        owner: resource.owner,
       },
     })) as Integration<IntegrationType.Embed>;
 
@@ -204,14 +374,111 @@ export class GitHub {
       const client = await GitHub.authenticateAsInstallation(
         integration.settings.github!.installation.id
       );
-      const { data } = await client.requestResource(resource);
-      if (!data) {
-        return;
+
+      if (resource.type === UnfurlResourceType.Project) {
+        return GitHub.unfurlProject(client, resource);
       }
-      return { ...data, type: resource.type };
+
+      const res = await client.requestResource(resource);
+      if (!res) {
+        return { error: "Resource not found" };
+      }
+
+      return GitHub.transformData(res.data, resource.type);
     } catch (err) {
-      Logger.warn("Failed to fetch resource from GitHub", err);
-      return;
+      Logger.warn("Failed to fetch resource from GitHub", toError(err));
+      return {
+        error: errToString(err) || "Unknown error",
+      };
     }
   };
+
+  private static async unfurlProject(
+    client: InstanceType<typeof CustomOctokit>,
+    resource: ParsedProject
+  ) {
+    let project: GitHubProject | undefined;
+    try {
+      project = await client.requestProject(resource);
+    } catch (err) {
+      Logger.warn("Failed to fetch project from GitHub", toError(err));
+      return { error: "Resource not found" };
+    }
+
+    if (!project) {
+      return { error: "Resource not found" };
+    }
+
+    const state = project.closed ? "completed" : "open";
+
+    return {
+      type: UnfurlResourceType.Project,
+      url: project.url,
+      id: `#${project.number}`,
+      name: project.title,
+      color: GitHubUtils.getColorForStatus(state),
+      description: project.description,
+      lead: null,
+      state: {
+        type: state,
+        name: state,
+        color: GitHubUtils.getColorForStatus(state),
+      },
+      labels: [],
+      createdAt: project.createdAt,
+      targetDate: null,
+    } satisfies UnfurlProject;
+  }
+
+  private static transformData(data: Issue | PR, type: UnfurlResourceType) {
+    if (type === UnfurlResourceType.Issue) {
+      const issue = data as Issue;
+      const issueState =
+        issue.state === "closed"
+          ? issue.state_reason === "completed"
+            ? "completed"
+            : "canceled"
+          : issue.state;
+      return {
+        type: UnfurlResourceType.Issue,
+        url: issue.html_url,
+        id: `#${issue.number}`,
+        title: issue.title,
+        description: issue.body_text ?? null,
+        author: {
+          name: issue.user?.login ?? "",
+          avatarUrl: issue.user?.avatar_url ?? "",
+        },
+        labels: issue.labels.map((label: { name: string; color: string }) => ({
+          name: label.name,
+          color: `#${label.color}`,
+        })),
+        state: {
+          name: issueState,
+          color: GitHubUtils.getColorForStatus(issueState),
+        },
+        createdAt: issue.created_at,
+      } satisfies UnfurlIssueOrPR;
+    }
+
+    const pr = data as PR;
+    const prState = pr.merged ? "merged" : pr.state;
+    return {
+      type: UnfurlResourceType.PR,
+      url: pr.html_url,
+      id: `#${pr.number}`,
+      title: pr.title,
+      description: pr.body,
+      author: {
+        name: pr.user.login,
+        avatarUrl: pr.user.avatar_url,
+      },
+      state: {
+        name: prState,
+        color: GitHubUtils.getColorForStatus(prState, !!pr.draft),
+        draft: pr.draft,
+      },
+      createdAt: pr.created_at,
+    } satisfies UnfurlIssueOrPR;
+  }
 }

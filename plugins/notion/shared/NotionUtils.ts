@@ -3,8 +3,11 @@ import env from "@shared/env";
 import { IntegrationService } from "@shared/types";
 import { settingsPath } from "@shared/utils/routeHelpers";
 
+export const NotionOAuthNonceCookie = "notionOAuthNonce";
+
 export type OAuthState = {
   teamId: string;
+  nonce: string;
 };
 
 export class NotionUtils {
@@ -13,8 +16,12 @@ export class NotionUtils {
 
   private static settingsUrl = settingsPath("import");
 
-  static parseState(state: string): OAuthState {
-    return JSON.parse(state);
+  static parseState(state: string): OAuthState | undefined {
+    try {
+      return JSON.parse(state);
+    } catch {
+      return undefined;
+    }
   }
 
   static successUrl(integrationId: string) {
@@ -36,7 +43,7 @@ export class NotionUtils {
 
   static callbackUrl(
     { baseUrl, params }: { baseUrl: string; params?: string } = {
-      baseUrl: `${env.URL}`,
+      baseUrl: env.URL,
       params: undefined,
     }
   ) {

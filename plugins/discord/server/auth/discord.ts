@@ -9,6 +9,7 @@ import type { Context } from "koa";
 import Router from "koa-router";
 
 import { Strategy } from "passport-oauth2";
+import { toError } from "@shared/utils/error";
 import { languages } from "@shared/i18n";
 import { slugifyDomain } from "@shared/utils/domains";
 import { parseEmail } from "@shared/utils/email";
@@ -16,17 +17,20 @@ import slugify from "@shared/utils/slugify";
 import accountProvisioner from "@server/commands/accountProvisioner";
 import { InvalidRequestError, TeamDomainRequiredError } from "@server/errors";
 import passportMiddleware from "@server/middlewares/passport";
-import { User } from "@server/models";
-import { AuthenticationResult } from "@server/types";
+import type { User } from "@server/models";
+import type { AuthenticationResult } from "@server/types";
 import {
   StateStore,
   getTeamFromContext,
-  getClientFromContext,
+  getClientFromOAuthState,
+  getUserFromOAuthState,
   request,
+  startOAuthFlow,
 } from "@server/utils/passport";
 import config from "../../plugin.json";
 import env from "../env";
 import { DiscordGuildError, DiscordGuildRoleError } from "../errors";
+import { createContext } from "@server/context";
 
 const router = new Router();
 
@@ -49,12 +53,13 @@ if (env.DISCORD_CLIENT_ID && env.DISCORD_CLIENT_SECRET) {
         store: new StateStore(),
         state: true,
         callbackURL: `${env.URL}/auth/${config.id}.callback`,
-        authorizationURL: "https://discord.com/api/oauth2/authorize",
+        authorizationURL:
+          "https://discord.com/api/oauth2/authorize?prompt=none",
         tokenURL: "https://discord.com/api/oauth2/token",
         pkce: false,
       },
       async function (
-        ctx: Context,
+        context: Context,
         accessToken: string,
         refreshToken: string,
         params: { expires_in: number },
@@ -66,8 +71,8 @@ if (env.DISCORD_CLIENT_ID && env.DISCORD_CLIENT_SECRET) {
         ) => void
       ) {
         try {
-          const team = await getTeamFromContext(ctx);
-          const client = getClientFromContext(ctx);
+          const team = await getTeamFromContext(context);
+          const client = getClientFromOAuthState(context);
           /** Fetch the user's profile */
           const profile: RESTGetAPICurrentUserResult = await request(
             "GET",
@@ -94,7 +99,7 @@ if (env.DISCORD_CLIENT_ID && env.DISCORD_CLIENT_SECRET) {
 
           /** Default user and team names metadata */
           let userName = profile.username;
-          let teamName = "Wiki";
+          let teamName;
           let userAvatarUrl: string = `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png`;
           let teamAvatarUrl: string | undefined = undefined;
           let subdomain = slugifyDomain(domain);
@@ -176,12 +181,18 @@ if (env.DISCORD_CLIENT_ID && env.DISCORD_CLIENT_SECRET) {
               }
             }
           }
+          const user =
+            context.state?.auth?.user ?? (await getUserFromOAuthState(context));
 
           // if a team can be inferred, we assume the user is only interested in signing into
           // that team in particular; otherwise, we will do a best effort at finding their account
           // or provisioning a new one (within AccountProvisioner)
-          const result = await accountProvisioner({
-            ip: ctx.ip,
+          const ctx = createContext({
+            ip: context.ip,
+            user,
+            authType: context.state?.auth?.type,
+          });
+          const result = await accountProvisioner(ctx, {
             team: {
               teamId: team?.id,
               name: teamName,
@@ -191,6 +202,7 @@ if (env.DISCORD_CLIENT_ID && env.DISCORD_CLIENT_SECRET) {
             },
             user: {
               email,
+              emailVerified: profile.verified,
               name: userName,
               language,
               avatarUrl: userAvatarUrl,
@@ -209,7 +221,7 @@ if (env.DISCORD_CLIENT_ID && env.DISCORD_CLIENT_SECRET) {
           });
           return done(null, result.user, { ...result, client });
         } catch (err) {
-          return done(err, null);
+          return done(toError(err), null);
         }
       }
     )
@@ -217,9 +229,9 @@ if (env.DISCORD_CLIENT_ID && env.DISCORD_CLIENT_SECRET) {
 
   router.get(
     config.id,
+    startOAuthFlow,
     passport.authenticate(config.id, {
       scope,
-      prompt: "consent",
     })
   );
   router.get(`${config.id}.callback`, passportMiddleware(config.id));

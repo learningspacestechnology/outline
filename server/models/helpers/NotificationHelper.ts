@@ -1,4 +1,4 @@
-import uniq from "lodash/uniq";
+import { uniq, uniqBy } from "es-toolkit/compat";
 import { Op } from "sequelize";
 import {
   NotificationEventType,
@@ -6,14 +6,8 @@ import {
   SubscriptionType,
 } from "@shared/types";
 import Logger from "@server/logging/Logger";
-import {
-  User,
-  Document,
-  Collection,
-  Subscription,
-  Comment,
-  View,
-} from "@server/models";
+import type { Document, Collection } from "@server/models";
+import { User, Subscription, Comment, View } from "@server/models";
 import { canUserAccessDocument } from "@server/utils/permissions";
 import { ProsemirrorHelper } from "./ProsemirrorHelper";
 
@@ -186,37 +180,43 @@ export default class NotificationHelper {
         },
       });
     } else {
-      const subscriptions = await Subscription.findAll({
-        attributes: ["userId"],
-        where: {
-          userId: {
-            [Op.ne]: actorId,
-          },
-          event: SubscriptionType.Document,
-          [Op.or]: [
-            { collectionId: document.collectionId },
-            { documentId: document.id },
-          ],
-        },
-        include: [
-          {
-            association: "user",
-            required: true,
-          },
-        ],
-      });
+      const userFilter = { userId: { [Op.ne]: actorId } };
+      const userInclude = [{ association: "user" as const, required: true }];
 
-      recipients = subscriptions.map((s) => s.user);
+      const [collectionSubs, documentSubs] = await Promise.all([
+        document.collectionId
+          ? Subscription.findAll({
+              where: {
+                ...userFilter,
+                event: SubscriptionType.Document,
+                collectionId: document.collectionId,
+              },
+              include: userInclude,
+            })
+          : [],
+        Subscription.findAll({
+          where: {
+            ...userFilter,
+            event: SubscriptionType.Document,
+            documentId: document.id,
+          },
+          include: userInclude,
+        }),
+      ]);
+
+      recipients = uniqBy(
+        [...collectionSubs, ...documentSubs].map((s) => s.user),
+        (user) => user.id
+      );
     }
-
-    recipients = recipients.filter((recipient) =>
-      recipient.subscribedToEventType(notificationType)
-    );
 
     const filtered = [];
 
     for (const recipient of recipients) {
-      if (recipient.isSuspended) {
+      if (
+        recipient.isSuspended ||
+        !recipient.subscribedToEventType(notificationType)
+      ) {
         continue;
       }
 

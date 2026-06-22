@@ -1,5 +1,5 @@
 import invariant from "invariant";
-import lowerFirst from "lodash/lowerFirst";
+import { lowerFirst } from "es-toolkit/compat";
 import pluralize from "pluralize";
 import ApiKeysStore from "./ApiKeysStore";
 import AuthStore from "./AuthStore";
@@ -10,6 +10,7 @@ import DialogsStore from "./DialogsStore";
 import DocumentPresenceStore from "./DocumentPresenceStore";
 import DocumentsStore from "./DocumentsStore";
 import EventsStore from "./EventsStore";
+import EmojisStore from "./EmojiStore";
 import FileOperationsStore from "./FileOperationsStore";
 import GroupMembershipsStore from "./GroupMembershipsStore";
 import GroupUsersStore from "./GroupUsersStore";
@@ -18,6 +19,8 @@ import ImportsStore from "./ImportsStore";
 import IntegrationsStore from "./IntegrationsStore";
 import MembershipsStore from "./MembershipsStore";
 import NotificationsStore from "./NotificationsStore";
+import OAuthAuthenticationsStore from "./OAuthAuthenticationsStore";
+import OAuthClientsStore from "./OAuthClientsStore";
 import PinsStore from "./PinsStore";
 import PoliciesStore from "./PoliciesStore";
 import RevisionsStore from "./RevisionsStore";
@@ -25,12 +28,14 @@ import SearchesStore from "./SearchesStore";
 import SharesStore from "./SharesStore";
 import StarsStore from "./StarsStore";
 import SubscriptionsStore from "./SubscriptionsStore";
+import TemplatesStore from "./TemplatesStore";
 import UiStore from "./UiStore";
+import UnfurlsStore from "./UnfurlsStore";
 import UserMembershipsStore from "./UserMembershipsStore";
 import UsersStore from "./UsersStore";
 import ViewsStore from "./ViewsStore";
 import WebhookSubscriptionsStore from "./WebhookSubscriptionStore";
-import Store from "./base/Store";
+import type Store from "./base/Store";
 
 export default class RootStore {
   apiKeys: ApiKeysStore;
@@ -41,6 +46,7 @@ export default class RootStore {
   comments: CommentsStore;
   dialogs: DialogsStore;
   documents: DocumentsStore;
+  emojis: EmojisStore;
   events: EventsStore;
   groups: GroupsStore;
   groupUsers: GroupUsersStore;
@@ -48,6 +54,8 @@ export default class RootStore {
   integrations: IntegrationsStore;
   memberships: MembershipsStore;
   notifications: NotificationsStore;
+  oauthAuthentications: OAuthAuthenticationsStore;
+  oauthClients: OAuthClientsStore;
   presence: DocumentPresenceStore;
   pins: PinsStore;
   policies: PoliciesStore;
@@ -55,8 +63,10 @@ export default class RootStore {
   searches: SearchesStore;
   shares: SharesStore;
   ui: UiStore;
+  unfurls: UnfurlsStore;
   stars: StarsStore;
   subscriptions: SubscriptionsStore;
+  templates: TemplatesStore;
   users: UsersStore;
   views: ViewsStore;
   fileOperations: FileOperationsStore;
@@ -71,6 +81,7 @@ export default class RootStore {
     this.registerStore(GroupMembershipsStore);
     this.registerStore(CommentsStore);
     this.registerStore(DocumentsStore);
+    this.registerStore(EmojisStore);
     this.registerStore(EventsStore);
     this.registerStore(GroupsStore);
     this.registerStore(GroupUsersStore);
@@ -78,6 +89,8 @@ export default class RootStore {
     this.registerStore(IntegrationsStore);
     this.registerStore(MembershipsStore);
     this.registerStore(NotificationsStore);
+    this.registerStore(OAuthAuthenticationsStore, "oauthAuthentications");
+    this.registerStore(OAuthClientsStore, "oauthClients");
     this.registerStore(PinsStore);
     this.registerStore(PoliciesStore);
     this.registerStore(RevisionsStore);
@@ -85,6 +98,8 @@ export default class RootStore {
     this.registerStore(SharesStore);
     this.registerStore(StarsStore);
     this.registerStore(SubscriptionsStore);
+    this.registerStore(TemplatesStore);
+    this.registerStore(UnfurlsStore);
     this.registerStore(UsersStore);
     this.registerStore(ViewsStore);
     this.registerStore(FileOperationsStore);
@@ -107,8 +122,9 @@ export default class RootStore {
    */
   public getStoreForModelName<K extends keyof RootStore>(modelName: string) {
     const storeName = this.getStoreNameForModelName(modelName);
+    invariant(storeName, `No store found for model name "${modelName}"`);
+
     const store = this[storeName];
-    invariant(store, `No store found for model name "${modelName}"`);
     return store as RootStore[K];
   }
 
@@ -119,8 +135,10 @@ export default class RootStore {
     Object.getOwnPropertyNames(this)
       .filter((key) => ["auth", "ui"].includes(key) === false)
       .forEach((key: keyof RootStore) => {
-        // @ts-expect-error clear exists on all stores
-        "clear" in this[key] && this[key].clear();
+        if ("clear" in this[key]) {
+          // @ts-expect-error clear exists on all stores
+          this[key].clear();
+        }
       });
   }
 
@@ -136,10 +154,24 @@ export default class RootStore {
     // @ts-expect-error TS thinks we are instantiating an abstract class.
     const store = new StoreClass(this);
     const storeName = name ?? this.getStoreNameForModelName(store.modelName);
+    invariant(storeName, `No store found for model name "${store.modelName}"`);
+
     this[storeName] = store;
   }
 
   private getStoreNameForModelName(modelName: string) {
-    return pluralize(lowerFirst(modelName)) as keyof RootStore;
+    for (const key of Object.keys(this)) {
+      const store = this[key as keyof RootStore];
+      if (store && "modelName" in store && store.modelName === modelName) {
+        return key as keyof RootStore;
+      }
+    }
+
+    const storeName = pluralize(lowerFirst(modelName)) as keyof RootStore;
+    if (storeName) {
+      return storeName;
+    }
+
+    return undefined;
   }
 }

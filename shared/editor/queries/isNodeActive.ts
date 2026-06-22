@@ -1,7 +1,9 @@
-import { NodeType } from "prosemirror-model";
-import { EditorState } from "prosemirror-state";
-import { Primitive } from "utility-types";
+import { NodeSelection } from "prosemirror-state";
+import type { NodeType } from "prosemirror-model";
+import type { EditorState } from "prosemirror-state";
+import type { Primitive } from "utility-types";
 import { findParentNode } from "./findParentNode";
+import { isSelectionInToggleBlockHead } from "./toggleBlock";
 
 type Options = {
   /** Only return match if the range and attrs is exact */
@@ -25,12 +27,30 @@ export const isNodeActive =
       return false;
     }
 
+    if (type === state.schema.nodes.container_toggle) {
+      // `container_toggle` is a special case where it's considered active
+      // only when the selection lies within its head
+      return isSelectionInToggleBlockHead(state);
+    }
+
+    let nodeWithPos;
     const { from, to } = state.selection;
-    const nodeWithPos = findParentNode(
+
+    if (
+      state.selection instanceof NodeSelection &&
+      state.selection.node.type === type &&
+      state.selection.node.hasMarkup(type, {
+        ...state.selection.node.attrs,
+        ...attrs,
+      })
+    ) {
+      nodeWithPos = { pos: from, node: state.selection.node };
+    }
+
+    nodeWithPos ??= findParentNode(
       (node) =>
         node.type === type &&
-        (!attrs ||
-          Object.keys(attrs).every((key) => node.attrs[key] === attrs[key]))
+        (!attrs || node.hasMarkup(type, { ...node.attrs, ...attrs }))
     )(state.selection);
 
     if (!nodeWithPos) {

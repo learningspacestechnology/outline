@@ -1,4 +1,4 @@
-import { Primitive } from "utility-types";
+import type { Primitive } from "utility-types";
 
 /**
  * Storage is a wrapper class for localStorage that allow safe usage when
@@ -64,6 +64,17 @@ class Storage {
   public remove(key: string) {
     try {
       this.interface.removeItem(key);
+    } catch (_err) {
+      // Ignore errors
+    }
+  }
+
+  /**
+   * Clear all values from storage.
+   */
+  public clear() {
+    try {
+      this.interface.clear();
     } catch (_err) {
       // Ignore errors
     }

@@ -1,9 +1,13 @@
-import { Next } from "koa";
-import { z, ZodError } from "zod";
+import type { Next } from "koa";
+import type { z } from "zod";
+import { ZodError } from "zod";
+import { toError } from "@shared/utils/error";
 import { ValidationError } from "@server/errors";
-import { APIContext, BaseReq } from "@server/types";
+import type { APIContext } from "@server/types";
 
-export default function validate<T extends z.ZodType<BaseReq>>(schema: T) {
+export default function validate<T extends z.ZodType<Record<string, unknown>>>(
+  schema: T
+) {
   return async function validateMiddleware(ctx: APIContext, next: Next) {
     try {
       ctx.input = {
@@ -14,10 +18,12 @@ export default function validate<T extends z.ZodType<BaseReq>>(schema: T) {
       if (err instanceof ZodError) {
         const { path, message } = err.issues[0];
         const errMessage =
-          path.length > 0 ? `${path[path.length - 1]}: ${message}` : message;
+          path.length > 0
+            ? `${String(path[path.length - 1])}: ${message}`
+            : message;
         throw ValidationError(errMessage);
       }
-      ctx.throw(err);
+      ctx.throw(toError(err));
     }
     return next();
   };

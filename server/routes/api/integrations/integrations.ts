@@ -1,14 +1,16 @@
 import Router from "koa-router";
-import { WhereOptions, Op } from "sequelize";
+import type { WhereOptions } from "sequelize";
+import { Op } from "sequelize";
 import { IntegrationType, UserRole } from "@shared/types";
 import auth from "@server/middlewares/authentication";
+import { rateLimiter } from "@server/middlewares/rateLimiter";
 import { transaction } from "@server/middlewares/transaction";
 import validate from "@server/middlewares/validate";
-import { Event } from "@server/models";
 import Integration from "@server/models/Integration";
 import { authorize } from "@server/policies";
 import { presentIntegration, presentPolicies } from "@server/presenters";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
+import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
 
@@ -47,7 +49,7 @@ router.post(
     };
 
     const [integrations, total] = await Promise.all([
-      await Integration.findAll({
+      Integration.findAll({
         where,
         order: [[sort, direction]],
         offset: ctx.state.pagination.offset,
@@ -68,15 +70,17 @@ router.post(
 
 router.post(
   "integrations.create",
+  rateLimiter(RateLimiterStrategy.TwentyFivePerMinute),
   auth({ role: UserRole.Admin }),
   validate(T.IntegrationsCreateSchema),
+  transaction(),
   async (ctx: APIContext<T.IntegrationsCreateReq>) => {
     const { type, service, settings } = ctx.input.body;
     const { user } = ctx.state.auth;
 
     authorize(user, "createIntegration", user.team);
 
-    const integration = await Integration.create({
+    const integration = await Integration.createWithCtx(ctx, {
       userId: user.id,
       teamId: user.teamId,
       service,
@@ -135,7 +139,7 @@ router.post(
 
     integration.settings = settings;
 
-    await integration.save({ transaction });
+    await integration.saveWithCtx(ctx);
 
     ctx.body = {
       data: presentIntegration(integration),
@@ -161,12 +165,7 @@ router.post(
     });
     authorize(user, "delete", integration);
 
-    await integration.destroy({ transaction });
-
-    await Event.createFromContext(ctx, {
-      name: "integrations.delete",
-      modelId: integration.id,
-    });
+    await integration.destroyWithCtx(ctx);
 
     ctx.body = {
       success: true,

@@ -1,9 +1,11 @@
 import retry from "fetch-retry";
-import trim from "lodash/trim";
+import { trim } from "es-toolkit/compat";
 import queryString from "query-string";
 import EDITOR_VERSION from "@shared/editor/version";
-import { JSONObject } from "@shared/types";
-import stores from "~/stores";
+import type { JSONObject } from "@shared/types";
+import { Scope } from "@shared/types";
+import { version } from "../../package.json";
+import env from "~/env";
 import Logger from "./Logger";
 import download from "./download";
 import {
@@ -20,16 +22,36 @@ import {
   UnprocessableEntityError,
   UpdateRequiredError,
 } from "./errors";
+import { getCookie } from "tiny-cookie";
+import { CSRF } from "@shared/constants";
+import AuthenticationHelper from "@shared/helpers/AuthenticationHelper";
 
 type Options = {
   baseUrl?: string;
 };
+
+/** An HTTP method supported by the API client. */
+type Method = "GET" | "POST" | "PUT";
+
+/** Shape of an error payload returned by the API. */
+interface ApiErrorResponse {
+  message?: string;
+  error?: string;
+  data?: Record<string, unknown>;
+}
+
+/** Reason the server rejected a request as unauthenticated. */
+export type UnauthorizedReason = "unauthorized" | "user_suspended";
+
+/** Handler invoked when a request is rejected as unauthenticated. */
+type UnauthorizedHandler = (reason: UnauthorizedReason) => void | Promise<void>;
 
 interface FetchOptions {
   download?: boolean;
   retry?: boolean;
   credentials?: "omit" | "same-origin" | "include";
   headers?: Record<string, string>;
+  baseUrl?: string;
 }
 
 const fetchWithRetry = retry(fetch);
@@ -39,70 +61,123 @@ class ApiClient {
 
   shareId?: string;
 
+  /** Map of in-flight requests for deduplication, keyed by method + path + body. */
+  // oxlint-disable-next-line no-explicit-any
+  private inflightRequests = new Map<string, Promise<any>>();
+
+  private onUnauthorized?: UnauthorizedHandler;
+
   constructor(options: Options = {}) {
     this.baseUrl = options.baseUrl || "/api";
   }
 
+  /**
+   * Sets the share identifier appended to subsequent requests, used to
+   * authenticate access to publicly shared documents.
+   *
+   * @param shareId the share identifier, or undefined to clear it.
+   */
   setShareId = (shareId: string | undefined) => {
     this.shareId = shareId;
   };
 
+  /**
+   * Registers a handler invoked when a request is rejected as unauthenticated
+   * (a 401, or a 403 indicating the user was suspended). Used to keep
+   * session/logout policy out of the transport layer.
+   *
+   * @param handler the handler to invoke.
+   */
+  setUnauthorizedHandler = (handler: UnauthorizedHandler) => {
+    this.onUnauthorized = handler;
+  };
+
+  /**
+   * Performs an HTTP request against the API, handling serialization, headers,
+   * CSRF, retries, and error mapping.
+   *
+   * @param path the request path, relative to the base URL or an absolute URL.
+   * @param method the HTTP method to use.
+   * @param data the request payload, sent as a query string for GET requests
+   * and as a JSON or multipart body otherwise.
+   * @param options additional request options.
+   * @returns the parsed JSON response, or undefined for downloads and empty responses.
+   * @throws {RequestError} if the response status indicates failure.
+   */
+  // oxlint-disable-next-line no-explicit-any
   fetch = async <T = any>(
     path: string,
-    method: string,
+    method: Method,
     data: JSONObject | FormData | undefined,
     options: FetchOptions = {}
   ): Promise<T> => {
     let body: string | FormData | undefined;
-    let modifiedPath;
-    let urlToFetch;
-    let isJson;
+    let modifiedPath: string | undefined;
+    let urlToFetch: string;
+    let isJson = false;
 
     if (this.shareId) {
-      // add to data
-      data = {
-        ...(data || {}),
-        shareId: this.shareId,
-      };
+      if (data instanceof FormData) {
+        data.append("shareId", this.shareId);
+      } else {
+        data = {
+          ...(data || {}),
+          shareId: this.shareId,
+        };
+      }
     }
 
     if (method === "GET") {
       if (data) {
-        modifiedPath = `${path}?${data && queryString.stringify(data)}`;
+        modifiedPath = `${path}?${queryString.stringify(data)}`;
       } else {
         modifiedPath = path;
       }
     } else if (method === "POST" || method === "PUT") {
       if (data instanceof FormData || typeof data === "string") {
         body = data;
-      }
-
-      // Only stringify data if its a normal object and
-      // not if it's [object FormData], in addition to
-      // toggling Content-Type to application/json
-      if (
-        typeof data === "object" &&
-        (data || "").toString() === "[object Object]"
-      ) {
+      } else {
         isJson = true;
-        body = JSON.stringify(data);
+
+        // Only stringify data if its a normal object and
+        // not if it's [object FormData], in addition to
+        // toggling Content-Type to application/json
+        if (
+          typeof data === "object" &&
+          Object.prototype.toString.call(data) === "[object Object]"
+        ) {
+          body = JSON.stringify(data);
+        }
       }
     }
 
     if (path.match(/^http/)) {
       urlToFetch = modifiedPath || path;
     } else {
-      urlToFetch = this.baseUrl + (modifiedPath || path);
+      urlToFetch = (options.baseUrl ?? this.baseUrl) + (modifiedPath || path);
     }
 
     const headerOptions: Record<string, string> = {
       Accept: "application/json",
       "cache-control": "no-cache",
       "x-editor-version": EDITOR_VERSION,
-      "x-api-version": "3",
+      "x-api-version": "4",
+      "x-client-version": env.VERSION ? `${version}-${env.VERSION}` : version,
       pragma: "no-cache",
       ...options?.headers,
     };
+
+    // Add CSRF token to headers for mutating requests
+    const isModifyingRequest = method === "POST" || method === "PUT";
+    const canAccessWithReadOnly = AuthenticationHelper.canAccess(path, [
+      Scope.Read,
+    ]);
+    if (isModifyingRequest && !canAccessWithReadOnly) {
+      const csrfToken = getCookie(CSRF.cookieName);
+      if (csrfToken) {
+        headerOptions[CSRF.headerName] = csrfToken;
+      }
+    }
 
     // for multipart forms or other non JSON requests fetch
     // populates the Content-Type without needing to explicitly
@@ -127,7 +202,7 @@ class ApiClient {
           cache: "no-cache",
         }
       );
-    } catch (err) {
+    } catch (_err) {
       if (window.navigator.onLine) {
         throw new NetworkError("A network error occurred, try again?");
       } else {
@@ -151,9 +226,11 @@ class ApiClient {
       return response.json();
     }
 
-    // Handle 401, log out user
+    // Handle 401, notify session owner to log out
     if (response.status === 401) {
-      await stores.auth.logout(true, false);
+      if (!this.shareId) {
+        await this.onUnauthorized?.("unauthorized");
+      }
       throw new AuthorizationError();
     }
 
@@ -171,14 +248,10 @@ class ApiClient {
     }
 
     // Handle failed responses
-    const error: {
-      message?: string;
-      error?: string;
-      data?: Record<string, any>;
-    } = {};
+    const error: ApiErrorResponse = {};
 
     try {
-      const parsed = await response.json();
+      const parsed: ApiErrorResponse = await response.json();
       error.message = parsed.message || "";
       error.error = parsed.error;
       error.data = parsed.data;
@@ -201,7 +274,13 @@ class ApiClient {
 
     if (response.status === 403) {
       if (error.error === "user_suspended") {
-        await stores.auth.logout(false, false);
+        await this.onUnauthorized?.("user_suspended");
+      }
+
+      if (error.error === "csrf_error") {
+        throw new AuthorizationError(
+          "CSRF token invalid, please try reloading."
+        );
       }
 
       throw new AuthorizationError(error.message);
@@ -235,17 +314,89 @@ class ApiClient {
     throw err;
   };
 
+  /**
+   * Performs a GET request against the API.
+   *
+   * @param path the request path, relative to the base URL or an absolute URL.
+   * @param data the data serialized into the query string.
+   * @param options additional request options.
+   * @returns the parsed JSON response.
+   */
+  // oxlint-disable-next-line no-explicit-any
   get = <T = any>(
     path: string,
     data: JSONObject | undefined,
     options?: FetchOptions
   ) => this.fetch<T>(path, "GET", data, options);
 
+  /**
+   * Performs a POST request against the API. Identical in-flight requests are
+   * deduplicated and share a single response, except for multipart uploads.
+   *
+   * @param path the request path, relative to the base URL or an absolute URL.
+   * @param data the request payload, sent as a JSON or multipart body.
+   * @param options additional request options.
+   * @returns the parsed JSON response.
+   */
+  // oxlint-disable-next-line no-explicit-any
   post = <T = any>(
     path: string,
-    data?: JSONObject | FormData | undefined,
+    data?: JSONObject | FormData,
     options?: FetchOptions
-  ) => this.fetch<T>(path, "POST", data, options);
+  ): Promise<T> => this.deduplicate<T>(path, "POST", data, options);
+
+  /**
+   * Performs a PUT request against the API. Identical in-flight requests are
+   * deduplicated and share a single response, except for multipart uploads.
+   *
+   * @param path the request path, relative to the base URL or an absolute URL.
+   * @param data the request payload, sent as a JSON or multipart body.
+   * @param options additional request options.
+   * @returns the parsed JSON response.
+   */
+  // oxlint-disable-next-line no-explicit-any
+  put = <T = any>(
+    path: string,
+    data?: JSONObject | FormData,
+    options?: FetchOptions
+  ): Promise<T> => this.deduplicate<T>(path, "PUT", data, options);
+
+  /**
+   * Sends a request, deduplicating identical in-flight requests so concurrent
+   * callers share a single response. Multipart uploads are never deduplicated.
+   *
+   * @param path the request path, relative to the base URL or an absolute URL.
+   * @param method the HTTP method to use.
+   * @param data the request payload.
+   * @param options additional request options.
+   * @returns the parsed JSON response.
+   */
+  // oxlint-disable-next-line no-explicit-any
+  private deduplicate = <T = any>(
+    path: string,
+    method: Method,
+    data?: JSONObject | FormData,
+    options?: FetchOptions
+  ): Promise<T> => {
+    if (data instanceof FormData) {
+      return this.fetch<T>(path, method, data, options);
+    }
+
+    const key = `${method}:${path}:${JSON.stringify(data)}:${JSON.stringify(
+      options
+    )}`;
+    const inflight = this.inflightRequests.get(key);
+    if (inflight) {
+      return inflight;
+    }
+
+    const promise = this.fetch<T>(path, method, data, options).finally(() => {
+      this.inflightRequests.delete(key);
+    });
+    this.inflightRequests.set(key, promise);
+    return promise;
+  };
 }
 
+/** Shared API client instance configured against the default base URL. */
 export const client = new ApiClient();

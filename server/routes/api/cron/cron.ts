@@ -1,22 +1,24 @@
 import Router from "koa-router";
 import env from "@server/env";
 import { AuthenticationError } from "@server/errors";
+import Logger from "@server/logging/Logger";
 import validate from "@server/middlewares/validate";
 import tasks from "@server/queues/tasks";
-import { TaskSchedule } from "@server/queues/tasks/BaseTask";
-import { APIContext } from "@server/types";
+import { CronTask, TaskInterval } from "@server/queues/tasks/base/CronTask";
+import type { APIContext } from "@server/types";
 import { safeEqual } from "@server/utils/crypto";
 import * as T from "./schema";
+import { Minute } from "@shared/utils/time";
 
 const router = new Router();
-
-/** Whether the minutely cron job has been received */
-const receivedPeriods = new Set<TaskSchedule>();
+const receivedPeriods = new Set<TaskInterval>();
 
 const cronHandler = async (ctx: APIContext<T.CronSchemaReq>) => {
-  const period = Object.keys(TaskSchedule).includes(ctx.params.period)
-    ? (ctx.params.period as TaskSchedule)
-    : TaskSchedule.Day;
+  const period = Object.values(TaskInterval).includes(
+    ctx.params.period as TaskInterval
+  )
+    ? (ctx.params.period as TaskInterval)
+    : TaskInterval.Day;
   const token = (ctx.input.body.token ?? ctx.input.query.token) as string;
   const limit = ctx.input.body.limit ?? ctx.input.query.limit;
 
@@ -28,23 +30,62 @@ const cronHandler = async (ctx: APIContext<T.CronSchemaReq>) => {
 
   for (const name in tasks) {
     const TaskClass = tasks[name];
-    if (TaskClass.cron === period) {
-      await TaskClass.schedule({ limit });
+    if (!(TaskClass.prototype instanceof CronTask)) {
+      continue;
+    }
 
+    // @ts-expect-error We won't instantiate an abstract class
+    const taskInstance = new TaskClass() as CronTask;
+
+    const cronConfig = taskInstance.cron;
+    const partitionWindow = cronConfig.partitionWindow;
+    const shouldSchedule =
+      cronConfig.interval === period ||
       // Backwards compatibility for installations that have not set up
       // cron jobs periods other than daily.
-    } else if (
-      TaskClass.cron === TaskSchedule.Minute &&
-      !receivedPeriods.has(TaskSchedule.Minute) &&
-      (period === TaskSchedule.Hour || period === TaskSchedule.Day)
-    ) {
-      await TaskClass.schedule({ limit });
-    } else if (
-      TaskClass.cron === TaskSchedule.Hour &&
-      !receivedPeriods.has(TaskSchedule.Hour) &&
-      period === TaskSchedule.Day
-    ) {
-      await TaskClass.schedule({ limit });
+      (cronConfig.interval === TaskInterval.Hour &&
+        !receivedPeriods.has(TaskInterval.Hour) &&
+        period === TaskInterval.Day);
+
+    if (shouldSchedule) {
+      // Stagger different tasks so they don't all hit the database at once
+      const taskDelay = CronTask.getStaggerDelay(name, cronConfig.interval);
+
+      if (partitionWindow && partitionWindow > 0) {
+        // Split the task into partitions to spread work across time window
+        // by dividing the partitionWindow into minutes and scheduling a delayed
+        // task for each minute. The taskDelay offsets the entire partition
+        // window so different tasks don't overlap.
+        const partitions = Math.ceil(partitionWindow / Minute.ms);
+        for (let i = 0; i < partitions; i++) {
+          const delay =
+            taskDelay + Math.floor((partitionWindow / partitions) * i);
+          const partition = {
+            partitionIndex: i,
+            partitionCount: partitions,
+          };
+
+          Logger.debug(
+            "task",
+            `Scheduling partitioned task ${name} (partition ${
+              i + 1
+            }/${partitions}) with delay of ${delay / 1000}s`
+          );
+
+          await taskInstance.schedule({ limit, partition }, { delay });
+        }
+      } else {
+        await taskInstance.schedule(
+          {
+            limit,
+            partition: {
+              partitionIndex: 0,
+              partitionCount: 1,
+            },
+          },
+          { delay: taskDelay }
+        );
+      }
     }
   }
 
@@ -52,7 +93,6 @@ const cronHandler = async (ctx: APIContext<T.CronSchemaReq>) => {
     success: true,
   };
 };
-
 router.get("cron.:period", validate(T.CronSchema), cronHandler);
 router.post("cron.:period", validate(T.CronSchema), cronHandler);
 

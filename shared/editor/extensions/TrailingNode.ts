@@ -1,24 +1,34 @@
-import { NodeType } from "prosemirror-model";
 import { Plugin, PluginKey } from "prosemirror-state";
 import Extension from "../lib/Extension";
+import {
+  requiresTrailingNode,
+  trailingNodeNotAfter,
+} from "../lib/trailingNode";
 
-export default class TrailingNode extends Extension {
+/**
+ * Options for the TrailingNode extension.
+ */
+type TrailingNodeOptions = {
+  /** Name of the node type to insert as the trailing node. */
+  node: string;
+  /** Node names after which a trailing node should not be inserted. */
+  notAfter: string[];
+};
+
+export default class TrailingNode extends Extension<TrailingNodeOptions> {
   get name() {
     return "trailing_node";
   }
 
-  get defaultOptions() {
+  get defaultOptions(): TrailingNodeOptions {
     return {
       node: "paragraph",
-      notAfter: ["paragraph", "heading"],
+      notAfter: trailingNodeNotAfter,
     };
   }
 
   get plugins() {
     const plugin = new PluginKey(this.name);
-    const disabledNodes = Object.entries(this.editor.schema.nodes)
-      .map(([, value]) => value)
-      .filter((node: NodeType) => this.options.notAfter.includes(node.name));
 
     return [
       new Plugin({
@@ -28,7 +38,7 @@ export default class TrailingNode extends Extension {
             const { state } = view;
             const insertNodeAtEnd = plugin.getState(state);
 
-            if (!insertNodeAtEnd) {
+            if (!insertNodeAtEnd || !view.editable) {
               return;
             }
 
@@ -39,18 +49,12 @@ export default class TrailingNode extends Extension {
           },
         }),
         state: {
-          init: (_, state) => {
-            const lastNode = state.tr.doc.lastChild;
-            return lastNode ? !disabledNodes.includes(lastNode.type) : false;
-          },
-          apply: (tr, value) => {
-            if (!tr.docChanged) {
-              return value;
-            }
-
-            const lastNode = tr.doc.lastChild;
-            return lastNode ? !disabledNodes.includes(lastNode.type) : false;
-          },
+          init: (_, state) =>
+            requiresTrailingNode(state.doc, this.options.notAfter),
+          apply: (tr, value) =>
+            tr.docChanged
+              ? requiresTrailingNode(tr.doc, this.options.notAfter)
+              : value,
         },
       }),
     ];

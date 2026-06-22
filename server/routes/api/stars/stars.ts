@@ -2,17 +2,19 @@ import Router from "koa-router";
 import { Sequelize } from "sequelize";
 import starCreator from "@server/commands/starCreator";
 import auth from "@server/middlewares/authentication";
+import { rateLimiter } from "@server/middlewares/rateLimiter";
 import { transaction } from "@server/middlewares/transaction";
 import validate from "@server/middlewares/validate";
 import { Document, Star, Collection } from "@server/models";
 import { authorize } from "@server/policies";
 import {
   presentStar,
-  presentDocument,
+  presentDocuments,
   presentPolicies,
 } from "@server/presenters";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
 import { starIndexing } from "@server/utils/indexing";
+import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
 
@@ -20,6 +22,7 @@ const router = new Router();
 
 router.post(
   "stars.create",
+  rateLimiter(RateLimiterStrategy.TwentyFivePerMinute),
   auth(),
   validate(T.StarsCreateSchema),
   transaction(),
@@ -37,9 +40,10 @@ router.post(
     }
 
     if (collectionId) {
-      const collection = await Collection.scope({
-        method: ["withMembership", user.id],
-      }).findByPk(collectionId, { transaction });
+      const collection = await Collection.findByPk(collectionId, {
+        userId: user.id,
+        transaction,
+      });
       authorize(user, "star", collection);
     }
 
@@ -94,7 +98,7 @@ router.post(
       .map((star) => star.documentId)
       .filter(Boolean) as string[];
     const documents = documentIds.length
-      ? await Document.defaultScopeWithUser(user.id).findAll({
+      ? await Document.withMembershipScope(user.id).findAll({
           where: {
             id: documentIds,
             collectionId: collectionIds,
@@ -108,9 +112,7 @@ router.post(
       pagination: ctx.state.pagination,
       data: {
         stars: stars.map(presentStar),
-        documents: await Promise.all(
-          documents.map((document: Document) => presentDocument(ctx, document))
-        ),
+        documents: await presentDocuments(ctx, documents),
       },
       policies,
     };

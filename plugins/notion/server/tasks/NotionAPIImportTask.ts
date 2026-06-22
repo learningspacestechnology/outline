@@ -1,14 +1,18 @@
-import { ImportTaskInput, ImportTaskOutput } from "@shared/schema";
-import { IntegrationService, ProsemirrorDoc } from "@shared/types";
+import { APIResponseError, APIErrorCode } from "@notionhq/client";
+import type { ImportTaskInput, ImportTaskOutput } from "@shared/schema";
+import type { IntegrationService, ProsemirrorDoc } from "@shared/types";
 import { ProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
+import { CollectionValidation, DocumentValidation } from "@shared/validations";
+import Logger from "@server/logging/Logger";
 import { Integration } from "@server/models";
-import ImportTask from "@server/models/ImportTask";
-import APIImportTask, {
-  ProcessOutput,
-} from "@server/queues/tasks/APIImportTask";
-import { Block, PageType } from "../../shared/types";
+import type ImportTask from "@server/models/ImportTask";
+import type { ProcessOutput } from "@server/queues/tasks/APIImportTask";
+import APIImportTask from "@server/queues/tasks/APIImportTask";
+import type { Block } from "../../shared/types";
+import { PageType } from "../../shared/types";
 import { NotionClient } from "../notion";
-import { NotionConverter, NotionPage } from "../utils/NotionConverter";
+import type { NotionPage } from "../utils/NotionConverter";
+import { NotionConverter } from "../utils/NotionConverter";
 
 type ChildPage = { type: PageType; externalId: string };
 
@@ -18,16 +22,26 @@ type ParsePageOutput = ImportTaskOutput[number] & {
 };
 
 export default class NotionAPIImportTask extends APIImportTask<IntegrationService.Notion> {
+  private skippableErrorMessages = [
+    "Database retrievals do not support linked databases",
+    "does not contain any data sources accessible by this API bot", // error msg for linked database views,
+    "Databases with multiple data sources are not supported in this API version", // https://github.com/outline/outline/issues/11573#issuecomment-3993691460
+  ];
+
   /**
-   * Process the Notion import task.
+   * Process a Notion page-phase import task.
    * This fetches data from Notion and converts it to task output.
    *
    * @param importTask ImportTask model to process.
    * @returns Promise with output that resolves once processing has completed.
    */
-  protected async process(
+  protected async processPage(
     importTask: ImportTask<IntegrationService.Notion>
   ): Promise<ProcessOutput<IntegrationService.Notion>> {
+    if (!importTask.import.integrationId) {
+      throw new Error("Notion import is missing integrationId");
+    }
+
     const integration = await Integration.scope("withAuthentication").findByPk(
       importTask.import.integrationId,
       { rejectOnEmpty: true }
@@ -35,14 +49,18 @@ export default class NotionAPIImportTask extends APIImportTask<IntegrationServic
 
     const client = new NotionClient(integration.authentication.token);
 
-    const parsedPages = await Promise.all(
-      importTask.input.map(async (item) => this.processPage({ item, client }))
-    );
+    const parsedPages: (ParsePageOutput | null)[] = [];
+    for (const item of importTask.input) {
+      parsedPages.push(await this.parsePage({ item, client }));
+    }
 
-    const taskOutput: ImportTaskOutput = parsedPages.map((parsedPage) => ({
+    // Filter out any null results (from pages/databases that couldn't be accessed)
+    const validParsedPages = parsedPages.filter(Boolean) as ParsePageOutput[];
+
+    const taskOutput: ImportTaskOutput = validParsedPages.map((parsedPage) => ({
       externalId: parsedPage.externalId,
       title: parsedPage.title,
-      emoji: parsedPage.emoji,
+      icon: parsedPage.icon,
       content: parsedPage.content,
       author: parsedPage.author,
       createdAt: parsedPage.createdAt,
@@ -50,7 +68,7 @@ export default class NotionAPIImportTask extends APIImportTask<IntegrationServic
     }));
 
     const childTasksInput: ImportTaskInput<IntegrationService.Notion> =
-      parsedPages.flatMap((parsedPage) =>
+      validParsedPages.flatMap((parsedPage) =>
         parsedPage.children.map((childPage) => ({
           type: childPage.type,
           externalId: childPage.externalId,
@@ -71,7 +89,7 @@ export default class NotionAPIImportTask extends APIImportTask<IntegrationServic
   protected async scheduleNextTask(
     importTask: ImportTask<IntegrationService.Notion>
   ) {
-    await NotionAPIImportTask.schedule({ importTaskId: importTask.id });
+    await new NotionAPIImportTask().schedule({ importTaskId: importTask.id });
     return;
   }
 
@@ -82,42 +100,85 @@ export default class NotionAPIImportTask extends APIImportTask<IntegrationServic
    * @param client Notion client.
    * @returns Promise of parsed page output that resolves when the task is scheduled.
    */
-  private async processPage({
+  private async parsePage({
     item,
     client,
   }: {
     item: ImportTaskInput<IntegrationService.Notion>[number];
     client: NotionClient;
-  }): Promise<ParsePageOutput> {
+  }): Promise<ParsePageOutput | null> {
     const collectionExternalId = item.collectionExternalId ?? item.externalId;
+    const titleMaxLength =
+      item.externalId === collectionExternalId // This means it's a root page which will be imported as a collection
+        ? CollectionValidation.maxNameLength
+        : DocumentValidation.maxTitleLength;
 
-    // Convert Notion database to an empty page with "pages in database" as its children.
-    if (item.type === PageType.Database) {
-      const { pages, ...databaseInfo } = await client.fetchDatabase(
-        item.externalId
+    try {
+      // Convert Notion database to an empty page with "pages in database" as its children.
+      if (item.type === PageType.Database) {
+        const { pages, emoji, ...databaseInfo } = await client.fetchDatabase(
+          item.externalId,
+          { titleMaxLength }
+        );
+
+        return {
+          ...databaseInfo,
+          icon: emoji,
+          externalId: item.externalId,
+          content: ProsemirrorHelper.getEmptyDocument() as ProsemirrorDoc,
+          collectionExternalId,
+          children: pages.map((page) => ({
+            type: page.type,
+            externalId: page.id,
+          })),
+        };
+      }
+
+      const { blocks, emoji, ...pageInfo } = await client.fetchPage(
+        item.externalId,
+        { titleMaxLength }
       );
 
       return {
-        ...databaseInfo,
+        ...pageInfo,
+        icon: emoji,
         externalId: item.externalId,
-        content: ProsemirrorHelper.getEmptyDocument() as ProsemirrorDoc,
+        content: NotionConverter.page({ children: blocks } as NotionPage),
         collectionExternalId,
-        children: pages.map((page) => ({
-          type: page.type,
-          externalId: page.id,
-        })),
+        children: this.parseChildPages(blocks),
       };
+    } catch (error) {
+      if (error instanceof APIResponseError) {
+        // Skip this page/database if it's not found or not accessible
+        if (
+          error.code === APIErrorCode.ObjectNotFound ||
+          error.code === APIErrorCode.Unauthorized ||
+          this.skippableErrorMessages.some((errorMsg) =>
+            error.message.includes(errorMsg)
+          )
+        ) {
+          Logger.warn(
+            `Skipping Notion ${
+              item.type === PageType.Database ? "database" : "page"
+            } ${item.externalId} - Error code: ${error.code} - ${error.message}`
+          );
+          return null;
+        }
+
+        // Rate limit errors should be handled by the fetchWithRetry method in NotionClient
+        // If we still get here, it means the maximum retries were exceeded
+        if (error.code === APIErrorCode.RateLimited) {
+          Logger.error(
+            `Rate limit exceeded for Notion API when processing ${
+              item.type === PageType.Database ? "database" : "page"
+            } ${item.externalId}. Maximum retries reached.`,
+            error
+          );
+        }
+      }
+      // Re-throw other errors to be handled by the parent try/catch
+      throw error;
     }
-
-    const { blocks, ...pageInfo } = await client.fetchPage(item.externalId);
-
-    return {
-      ...pageInfo,
-      externalId: item.externalId,
-      content: NotionConverter.page({ children: blocks } as NotionPage),
-      collectionExternalId,
-      children: this.parseChildPages(blocks),
-    };
   }
 
   /**

@@ -19,3 +19,12 @@ certs/
 backup.sql
 backups
 backups/
+.history
+
+# Yarn Berry
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+.yarn/releases
+!.yarn/sdks

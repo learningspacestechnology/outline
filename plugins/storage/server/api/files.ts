@@ -1,6 +1,8 @@
 import JWT from "jsonwebtoken";
 import Router from "koa-router";
 import mime from "mime-types";
+import contentDisposition from "content-disposition";
+import { bytesToHumanReadable } from "@shared/utils/files";
 import env from "@server/env";
 import {
   AuthenticationError,
@@ -11,13 +13,14 @@ import {
 import auth from "@server/middlewares/authentication";
 import multipart from "@server/middlewares/multipart";
 import { rateLimiter } from "@server/middlewares/rateLimiter";
+import timeout from "@server/middlewares/timeout";
 import validate from "@server/middlewares/validate";
 import { Attachment } from "@server/models";
 import AttachmentHelper from "@server/models/helpers/AttachmentHelper";
 import { authorize } from "@server/policies";
 import FileStorage from "@server/storage/files";
-import LocalStorage from "@server/storage/files/LocalStorage";
-import { APIContext } from "@server/types";
+import type LocalStorage from "@server/storage/files/LocalStorage";
+import type { APIContext } from "@server/types";
 import { RateLimiterStrategy } from "@server/utils/RateLimiter";
 import { getJWTPayload } from "@server/utils/jwt";
 import * as T from "./schema";
@@ -26,9 +29,10 @@ const router = new Router();
 
 router.post(
   "files.create",
-  rateLimiter(RateLimiterStrategy.TenPerMinute),
+  rateLimiter(RateLimiterStrategy.TwentyFivePerMinute),
   auth(),
   validate(T.FilesCreateSchema),
+  timeout(30 * 60 * 1000), // 30 minutes for large file uploads
   multipart({
     maximumFileSize: Math.max(
       env.FILE_STORAGE_UPLOAD_MAX_SIZE,
@@ -40,6 +44,10 @@ router.post(
     const { key } = ctx.input.body;
     const file = ctx.input.file;
 
+    if (!file) {
+      throw ValidationError("Request must include a file parameter");
+    }
+
     const attachment = await Attachment.findOne({
       where: { key },
       rejectOnEmpty: true,
@@ -49,15 +57,29 @@ router.post(
       throw AuthorizationError("Invalid key");
     }
 
+    const declaredSize = Number(attachment.size);
+
+    if (file.size > declaredSize) {
+      throw ValidationError(
+        `The uploaded file exceeds the declared size of ${bytesToHumanReadable(
+          declaredSize
+        )}`
+      );
+    }
+
     try {
       await attachment.writeFile(file);
     } catch (err) {
-      if (err.message.includes("permission denied")) {
+      if (err instanceof Error && err.message.includes("permission denied")) {
         throw Error(
           `Permission denied writing to "${key}". Check the host machine file system permissions.`
         );
       }
       throw err;
+    }
+
+    if (declaredSize !== file.size) {
+      await attachment.update({ size: file.size }, { silent: true });
     }
 
     ctx.body = {
@@ -76,19 +98,20 @@ router.get(
     const forceDownload = !!ctx.input.query.download;
     const isSignedRequest = !!ctx.input.query.sig;
     const { isPublicBucket, fileName } = AttachmentHelper.parseKey(key);
-    const skipAuthorize = isPublicBucket || isSignedRequest;
     const cacheHeader = "max-age=604800, immutable";
+    const attachment = await Attachment.findByKey(key);
 
-    const attachment = await Attachment.findOne({
-      where: { key },
-    });
-
-    // Attachment is requested with a key, but it was not found
-    if (!attachment && !!ctx.input.query.key) {
-      throw NotFoundError();
-    }
+    // Skip authorization for public bucket, signed requests, or public-read ACL attachments
+    const skipAuthorize =
+      isPublicBucket ||
+      isSignedRequest ||
+      (attachment && !attachment.isPrivate);
 
     if (!skipAuthorize) {
+      if (!attachment && !!ctx.input.query.key) {
+        throw NotFoundError();
+      }
+
       authorize(actor, "read", attachment);
     }
 
@@ -97,14 +120,31 @@ router.get(
       (fileName ? mime.lookup(fileName) : undefined) ||
       "application/octet-stream";
 
+    if (contentType === "application/pdf") {
+      ctx.remove("X-Frame-Options");
+    }
+
     ctx.set("Accept-Ranges", "bytes");
+    ctx.set("Access-Control-Allow-Origin", "*");
     ctx.set("Cache-Control", cacheHeader);
     ctx.set("Content-Type", contentType);
-    ctx.attachment(fileName, {
-      type: forceDownload
-        ? "attachment"
-        : FileStorage.getContentDisposition(contentType),
-    });
+    ctx.set(
+      "Content-Security-Policy",
+      // Safari will not render PDFs in an embed if the sandbox directive is used, so we use a
+      // tight CSP in that case. For all other file types we use the strict sandbox directive
+      // which blocks all content from being loaded and rendered.
+      contentType === "application/pdf"
+        ? "default-src 'self'; object-src 'self'; base-uri 'none';"
+        : "sandbox"
+    );
+    ctx.set(
+      "Content-Disposition",
+      contentDisposition(fileName, {
+        type: forceDownload
+          ? "attachment"
+          : FileStorage.getContentDisposition(contentType),
+      })
+    );
 
     // Handle byte range requests
     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests
@@ -157,7 +197,7 @@ function getKeyFromContext(ctx: APIContext<T.FilesGetReq>): string {
 
     try {
       JWT.verify(sig, env.SECRET_KEY);
-    } catch (err) {
+    } catch (_err) {
       throw AuthenticationError("Invalid signature");
     }
 

@@ -1,20 +1,32 @@
-/* eslint-disable import/no-duplicates */
+/* oxlint-disable import/no-duplicates */
+import type { Locale } from "date-fns";
 import {
-  Locale,
   addSeconds,
+  format,
   formatDistanceToNow,
+  isSameYear,
+  isToday,
+  isTomorrow,
+  isYesterday,
+  parseISO,
   subDays,
   subMonths,
   subWeeks,
   subYears,
+  isValid,
+  parse,
 } from "date-fns";
 import {
+  ca,
   cs,
   de,
+  enGB,
   enUS,
   es,
   faIR,
   fr,
+  he,
+  hu,
   it,
   ja,
   ko,
@@ -31,6 +43,99 @@ import {
   zhTW,
 } from "date-fns/locale";
 import type { DateFilter } from "../types";
+import { isBrowser } from "./browser";
+
+/**
+ * Determines if the user's locale uses month-first date format (MM/dd).
+ *
+ * @returns true if locale uses MM/dd format, false for dd/MM format.
+ */
+export function usesMonthFirstFormat(): boolean {
+  if (!isBrowser || typeof Intl === "undefined") {
+    return false;
+  }
+
+  // Format a known date and check if month comes before day
+  const formatted = new Intl.DateTimeFormat(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(2000, 11, 25)); // Dec 25, 2000
+
+  // If it starts with "12", month comes first
+  return formatted.startsWith("12");
+}
+
+/**
+ * Attempts to parse a date string in various common formats.
+ *
+ * @param dateStr The date string to parse.
+ * @returns a Date object if parsing is successful, null otherwise.
+ */
+export function parseDate(dateStr: string): Date | null {
+  if (!dateStr) {
+    return null;
+  }
+
+  // Remove any trailing alphabetic text (e.g., "Uhr", "at", "o'clock", etc.)
+  const cleaned = dateStr.trim().replace(/\s*[a-zA-Z]+\s*$/, "");
+
+  const monthFirst = [
+    "MM/dd/yyyy HH:mm:ss",
+    "MM/dd/yyyy HH:mm",
+    "MM/dd/yyyy",
+    "MM/dd HH:mm:ss",
+    "MM/dd HH:mm",
+    "MM/dd",
+  ];
+
+  const dayFirst = [
+    "dd/MM/yyyy HH:mm:ss",
+    "dd/MM/yyyy HH:mm",
+    "dd/MM/yyyy",
+    "dd/MM HH:mm:ss",
+    "dd/MM HH:mm",
+    "dd/MM",
+  ];
+
+  // Ambiguous slash formats - order based on user's locale
+  const slashFormats = usesMonthFirstFormat()
+    ? [...monthFirst, ...dayFirst]
+    : [...dayFirst, ...monthFirst];
+
+  // Common date formats used in tables (with and without time, with and without year)
+  const formats = [
+    // ISO formats
+    "yyyy-MM-dd HH:mm:ss",
+    "yyyy-MM-dd HH:mm",
+    "yyyy-MM-dd",
+    // European dot formats
+    "dd.MM.yyyy HH:mm:ss",
+    "dd.MM.yyyy HH:mm",
+    "dd.MM.yyyy",
+    "dd.MM. HH:mm:ss",
+    "dd.MM. HH:mm",
+    "dd.MM.",
+    "d.M.yyyy HH:mm:ss",
+    "d.M.yyyy HH:mm",
+    "d.M.yyyy",
+    "d.M. HH:mm:ss",
+    "d.M. HH:mm",
+    "d.M.",
+    // Locale-dependent slash formats
+    ...slashFormats,
+  ];
+
+  const referenceDate = new Date();
+
+  for (const format of formats) {
+    const date = parse(cleaned, format, referenceDate);
+    if (isValid(date)) {
+      return date;
+    }
+  }
+
+  return null;
+}
 
 export function subtractDate(date: Date, period: DateFilter) {
   switch (period) {
@@ -161,12 +266,16 @@ export function getCurrentDateTimeAsString(locale?: Intl.LocalesArgument) {
 }
 
 const locales = {
+  ca_ES: ca,
   cs_CZ: cs,
   de_DE: de,
+  en_GB: enGB,
   en_US: enUS,
   es_ES: es,
   fa_IR: faIR,
   fr_FR: fr,
+  he_IL: he,
+  hu_HU: hu,
   it_IT: it,
   ja_JP: ja,
   ko_KR: ko,
@@ -194,3 +303,94 @@ export function dateLocale(language: keyof typeof locales | undefined | null) {
 }
 
 export { locales };
+
+/**
+ * Formats a Date into a date-only ISO string (yyyy-MM-dd) in the local
+ * timezone. Used as the stored value for date mentions.
+ *
+ * @param date The date to format.
+ * @returns the date-only ISO string.
+ */
+export function toISODate(date: Date): string {
+  return format(date, "yyyy-MM-dd");
+}
+
+/**
+ * Parses a date-only ISO string (yyyy-MM-dd) into a Date at local midnight.
+ * Strings carrying a time component are rejected so the date-only contract
+ * (and the day-granular comparisons that depend on it) cannot be violated.
+ *
+ * @param iso The date-only ISO string.
+ * @returns the parsed Date at local midnight, or null when the string is not a
+ * valid date-only value.
+ */
+export function parseISODate(iso: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+    return null;
+  }
+  const date = parseISO(iso);
+  return isValid(date) ? date : null;
+}
+
+/**
+ * Formats a date mention's stored ISO value into an absolute, localized,
+ * human-readable label. The year is omitted within the current year (e.g.
+ * "January 2nd") and included otherwise (e.g. "February 3rd, 2024"). Suitable
+ * for plaintext and markdown serialization.
+ *
+ * @param iso The date-only ISO string.
+ * @param language The user's language preference.
+ * @returns the absolute human-readable date, or the original string when invalid.
+ */
+export function dateToReadable(
+  iso: string,
+  language?: keyof typeof locales | null
+): string {
+  const date = parseISODate(iso);
+  if (!date) {
+    return iso;
+  }
+  const locale = dateLocale(language);
+  if (isSameYear(date, new Date())) {
+    return format(date, "MMMM do", { locale });
+  }
+  return format(date, "MMMM do, yyyy", { locale });
+}
+
+/**
+ * Formats a date mention's stored ISO value into a relative, localized,
+ * human-readable label with increasing granularity. Returns "Today",
+ * "Tomorrow" or "Yesterday" where applicable, "January 2nd" within the
+ * current year, and "February 3rd, 2024" otherwise.
+ *
+ * @param iso The date-only ISO string.
+ * @param t The translation function.
+ * @param language The user's language preference.
+ * @returns the relative human-readable date, or the original string when invalid.
+ */
+export function dateToRelativeReadable(
+  iso: string,
+  t: (key: string) => string,
+  language?: keyof typeof locales | null
+): string {
+  const date = parseISODate(iso);
+  if (!date) {
+    return iso;
+  }
+
+  if (isToday(date)) {
+    return t("Today");
+  }
+  if (isTomorrow(date)) {
+    return t("Tomorrow");
+  }
+  if (isYesterday(date)) {
+    return t("Yesterday");
+  }
+
+  const locale = dateLocale(language);
+  if (isSameYear(date, new Date())) {
+    return format(date, "MMMM do", { locale });
+  }
+  return format(date, "MMMM do, yyyy", { locale });
+}

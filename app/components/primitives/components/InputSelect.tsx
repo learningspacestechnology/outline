@@ -3,14 +3,16 @@
  */
 
 import { CheckmarkIcon } from "outline-icons";
-import React from "react";
+import { forwardRef } from "react";
 import styled, { css } from "styled-components";
 import breakpoint from "styled-components-breakpoint";
 import { s } from "@shared/styles";
 import Button, { Inner } from "~/components/Button";
 import Flex from "~/components/Flex";
+import Text from "~/components/Text";
+import { transparentize } from "polished";
 
-export const SelectItem = React.forwardRef<
+export const SelectItem = forwardRef<
   HTMLDivElement,
   React.ComponentPropsWithoutRef<"div">
 >((props, ref) => {
@@ -31,7 +33,7 @@ export const SelectItem = React.forwardRef<
 });
 SelectItem.displayName = "SelectItem";
 
-export const SelectItemIndicator = React.forwardRef<
+export const SelectItemIndicator = forwardRef<
   HTMLSpanElement,
   React.ComponentPropsWithoutRef<"span">
 >((props, ref) => (
@@ -71,13 +73,13 @@ export const SelectButton = styled(Button)<{ $nude?: boolean }>`
 
   ${Inner} {
     line-height: 28px;
-    padding-left: 12px;
-    padding-right: 4px;
+    padding-inline-start: 12px;
+    padding-inline-end: 4px;
   }
 
   svg {
     justify-self: flex-end;
-    margin-left: auto;
+    margin-inline-start: auto;
   }
 
   &[data-placeholder=""] {
@@ -114,6 +116,10 @@ const ItemContainer = styled(Flex)`
         color: ${s("accentText")};
         fill: ${s("accentText")};
       }
+
+      ${Text} {
+        color: ${(props) => transparentize(0.5, props.theme.accentText)};
+      }
     }
   }
 
@@ -126,7 +132,7 @@ const ItemContainer = styled(Flex)`
   ${breakpoint("tablet")`
     font-size: 14px;
     padding: 4px;
-    padding-left: 8px;
+    padding-inline-start: 8px;
   `}
 `;
 

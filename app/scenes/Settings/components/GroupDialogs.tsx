@@ -1,12 +1,11 @@
-import debounce from "lodash/debounce";
+import { debounce } from "es-toolkit/compat";
 import { observer } from "mobx-react";
-import { PlusIcon } from "outline-icons";
-import React from "react";
+import * as React from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { v4 as uuidv4 } from "uuid";
+import { errToString } from "@shared/utils/error";
 import Group from "~/models/Group";
-import User from "~/models/User";
+import type User from "~/models/User";
 import Invite from "~/scenes/Invite";
 import { Avatar, AvatarSize } from "~/components/Avatar";
 import Badge from "~/components/Badge";
@@ -20,14 +19,21 @@ import Input from "~/components/Input";
 import PlaceholderList from "~/components/List/Placeholder";
 import PaginatedList from "~/components/PaginatedList";
 import { ListItem } from "~/components/Sharing/components/ListItem";
-import Subheading from "~/components/Subheading";
 import Text from "~/components/Text";
 import Time from "~/components/Time";
 import useCurrentTeam from "~/hooks/useCurrentTeam";
 import usePolicy from "~/hooks/usePolicy";
 import useRequest from "~/hooks/useRequest";
 import useStores from "~/hooks/useStores";
-import GroupMemberMenu from "~/menus/GroupMemberMenu";
+import InputMemberPermissionSelect from "~/components/InputMemberPermissionSelect";
+import { GroupPermission } from "@shared/types";
+import { GroupValidation } from "@shared/validations";
+import type { Permission } from "~/types";
+import { EmptySelectValue } from "~/types";
+import type GroupUser from "~/models/GroupUser";
+import Switch from "~/components/Switch";
+import history from "~/utils/history";
+import { settingsPath } from "~/utils/routeHelpers";
 
 type Props = {
   group: Group;
@@ -38,6 +44,7 @@ export function CreateGroupDialog() {
   const { dialogs, groups } = useStores();
   const { t } = useTranslation();
   const [name, setName] = React.useState<string | undefined>();
+  const [description, setDescription] = React.useState<string | undefined>();
   const [isSaving, setIsSaving] = React.useState(false);
 
   const handleSubmit = React.useCallback(
@@ -48,24 +55,22 @@ export function CreateGroupDialog() {
       const group = new Group(
         {
           name,
+          description,
         },
         groups
       );
 
       try {
         await group.save();
-        dialogs.openModal({
-          title: t("Group members"),
-          content: <ViewGroupMembersDialog group={group} />,
-          fullscreen: true,
-        });
+        dialogs.closeAllModals();
+        history.push(settingsPath("groups", group.id, "members"));
       } catch (err) {
-        toast.error(err.message);
+        toast.error(errToString(err));
       } finally {
         setIsSaving(false);
       }
     },
-    [t, dialogs, groups, name]
+    [dialogs, groups, name, description]
   );
 
   return (
@@ -77,14 +82,25 @@ export function CreateGroupDialog() {
           example.
         </Trans>
       </Text>
-      <Flex>
+      <Flex column>
         <Input
           type="text"
           label="Name"
           onChange={(e) => setName(e.target.value)}
           value={name}
+          maxLength={GroupValidation.maxNameLength}
+          showCharacterCount
           required
           autoFocus
+          flex
+        />
+        <Input
+          type="textarea"
+          label="Description"
+          placeholder={t("Optional")}
+          onChange={(e) => setDescription(e.target.value)}
+          value={description || ""}
+          maxLength={GroupValidation.maxDescriptionLength}
           flex
         />
       </Flex>
@@ -102,6 +118,10 @@ export function CreateGroupDialog() {
 export function EditGroupDialog({ group, onSubmit }: Props) {
   const { t } = useTranslation();
   const [name, setName] = React.useState(group.name);
+  const [description, setDescription] = React.useState(group.description || "");
+  const [disableMentions, setDisableMentions] = React.useState(
+    group.disableMentions || false
+  );
   const [isSaving, setIsSaving] = React.useState(false);
   const handleSubmit = React.useCallback(
     async (ev: React.SyntheticEvent) => {
@@ -111,15 +131,17 @@ export function EditGroupDialog({ group, onSubmit }: Props) {
       try {
         await group.save({
           name,
+          description,
+          disableMentions,
         });
         onSubmit();
       } catch (err) {
-        toast.error(err.message);
+        toast.error(errToString(err));
       } finally {
         setIsSaving(false);
       }
     },
-    [group, onSubmit, name]
+    [group, onSubmit, name, description, disableMentions]
   );
 
   const handleNameChange = React.useCallback(
@@ -132,20 +154,48 @@ export function EditGroupDialog({ group, onSubmit }: Props) {
   return (
     <form onSubmit={handleSubmit}>
       <Text as="p" type="secondary">
-        <Trans>
-          You can edit the name of this group at any time, however doing so too
-          often might confuse your team mates.
-        </Trans>
+        {group.isExternallyManaged ? (
+          <Trans>
+            This group is managed by an external authentication provider. The
+            name is synced automatically and cannot be changed.
+          </Trans>
+        ) : (
+          <Trans>
+            You can edit the name of this group at any time, however doing so
+            too often might confuse your team mates.
+          </Trans>
+        )}
       </Text>
-      <Flex>
+      <Flex column>
         <Input
           type="text"
           label={t("Name")}
           onChange={handleNameChange}
           value={name}
+          maxLength={GroupValidation.maxNameLength}
+          showCharacterCount
+          disabled={group.isExternallyManaged}
           required
           autoFocus
           flex
+        />
+        <Input
+          type="textarea"
+          label={t("Description")}
+          placeholder={t("Optional")}
+          onChange={(e) => setDescription(e.target.value)}
+          value={description}
+          maxLength={GroupValidation.maxDescriptionLength}
+          flex
+        />
+        <Switch
+          id="mentions"
+          label={t("Hidden")}
+          note={t(
+            "Prevent this group from being mentionable in documents or comments"
+          )}
+          checked={disableMentions}
+          onChange={setDisableMentions}
         />
       </Flex>
 
@@ -184,110 +234,7 @@ export function DeleteGroupDialog({ group, onSubmit }: Props) {
   );
 }
 
-export const ViewGroupMembersDialog = observer(function ({
-  group,
-}: Pick<Props, "group">) {
-  const { dialogs, users, groupUsers } = useStores();
-  const { t } = useTranslation();
-  const can = usePolicy(group);
-
-  const handleAddPeople = React.useCallback(() => {
-    dialogs.openModal({
-      title: t(`Add people to {{groupName}}`, {
-        groupName: group.name,
-      }),
-      content: <AddPeopleToGroupDialog group={group} />,
-      fullscreen: true,
-    });
-  }, [t, group, dialogs]);
-
-  const handleRemoveUser = React.useCallback(
-    async (user: User) => {
-      try {
-        await groupUsers.delete({
-          groupId: group.id,
-          userId: user.id,
-        });
-        toast.success(
-          t(`{{userName}} was removed from the group`, {
-            userName: user.name,
-          }),
-          {
-            icon: <Avatar model={user} size={AvatarSize.Toast} />,
-          }
-        );
-      } catch (err) {
-        toast.error(t("Could not remove user"));
-      }
-    },
-    [t, groupUsers, group.id]
-  );
-
-  return (
-    <Flex column>
-      {can.update ? (
-        <>
-          <Text as="p" type="secondary">
-            <Trans
-              defaults="Add and remove members to the <em>{{groupName}}</em> group. Members of the group will have access to any collections this group has been added to."
-              values={{
-                groupName: group.name,
-              }}
-              components={{
-                em: <strong />,
-              }}
-            />
-          </Text>
-          {can.update && (
-            <span>
-              <Button
-                type="button"
-                onClick={handleAddPeople}
-                icon={<PlusIcon />}
-                neutral
-              >
-                {t("Add people")}…
-              </Button>
-            </span>
-          )}
-        </>
-      ) : (
-        <Text as="p" type="secondary">
-          <Trans
-            defaults="Listing members of the <em>{{groupName}}</em> group."
-            values={{
-              groupName: group.name,
-            }}
-            components={{
-              em: <strong />,
-            }}
-          />
-        </Text>
-      )}
-
-      <Subheading>
-        <Trans>Members</Trans>
-      </Subheading>
-      <PaginatedList
-        items={users.inGroup(group.id)}
-        fetch={groupUsers.fetchPage}
-        options={{
-          id: group.id,
-        }}
-        empty={<Empty>{t("This group has no members.")}</Empty>}
-        renderItem={(user: User) => (
-          <GroupMemberListItem
-            key={user.id}
-            user={user}
-            onRemove={can.update ? () => handleRemoveUser(user) : undefined}
-          />
-        )}
-      />
-    </Flex>
-  );
-});
-
-const AddPeopleToGroupDialog = observer(function ({
+export const AddPeopleToGroupDialog = observer(function ({
   group,
 }: Pick<Props, "group">) {
   const { dialogs, users, groupUsers } = useStores();
@@ -326,7 +273,7 @@ const AddPeopleToGroupDialog = observer(function ({
             icon: <Avatar model={user} size={AvatarSize.Toast} />,
           }
         );
-      } catch (err) {
+      } catch (_err) {
         toast.error(t("Could not add user"));
       }
     },
@@ -334,11 +281,10 @@ const AddPeopleToGroupDialog = observer(function ({
   );
 
   const handleInvitePeople = React.useCallback(() => {
-    const id = uuidv4();
     dialogs.openModal({
-      id,
       title: t("Invite people"),
-      content: <Invite onSubmit={() => dialogs.closeModal(id)} />,
+      content: <Invite onSubmit={dialogs.closeAllModals} />,
+      replace: true,
     });
   }, [t, dialogs]);
 
@@ -382,7 +328,7 @@ const AddPeopleToGroupDialog = observer(function ({
           <PlaceholderList count={5} />
         </DelayedMount>
       ) : (
-        <PaginatedList
+        <PaginatedList<User>
           empty={
             query ? (
               <Empty>{t("No people matching your search")}</Empty>
@@ -392,10 +338,12 @@ const AddPeopleToGroupDialog = observer(function ({
           }
           items={users.notInGroup(group.id, query)}
           fetch={query ? undefined : users.fetchPage}
-          renderItem={(item: User) => (
+          renderItem={(item) => (
             <GroupMemberListItem
               key={item.id}
               user={item}
+              group={group}
+              groupUser={undefined}
               onAdd={() => handleAddUser(item)}
             />
           )}
@@ -407,16 +355,41 @@ const AddPeopleToGroupDialog = observer(function ({
 
 type GroupMemberListItemProps = {
   user: User;
+  group: Group;
+  groupUser: GroupUser | undefined;
   onAdd?: () => Promise<void>;
   onRemove?: () => Promise<void>;
 };
 
 const GroupMemberListItem = observer(function ({
   user,
-  onRemove,
+  group,
+  groupUser,
   onAdd,
 }: GroupMemberListItemProps) {
   const { t } = useTranslation();
+  const { groupUsers } = useStores();
+  const can = usePolicy(group);
+
+  const permissions = React.useMemo(
+    () =>
+      [
+        {
+          label: t("Group admin"),
+          value: GroupPermission.Admin,
+        },
+        {
+          label: t("Member"),
+          value: GroupPermission.Member,
+        },
+        {
+          divider: true,
+          label: t("Remove"),
+          value: EmptySelectValue,
+        },
+      ] as Permission[],
+    [t]
+  );
 
   return (
     <ListItem
@@ -429,7 +402,7 @@ const GroupMemberListItem = observer(function ({
             </Trans>
           ) : (
             t("Never signed in")
-          )}
+          )}{" "}
           {user.isInvited && <Badge>{t("Invited")}</Badge>}
           {user.isAdmin && <Badge primary={user.isAdmin}>{t("Admin")}</Badge>}
         </>
@@ -437,11 +410,40 @@ const GroupMemberListItem = observer(function ({
       image={<Avatar model={user} size={AvatarSize.Large} />}
       actions={
         <Flex align="center">
-          {onRemove && <GroupMemberMenu onRemove={onRemove} />}
-          {onAdd && (
+          {onAdd ? (
             <Button onClick={onAdd} neutral>
               {t("Add")}
             </Button>
+          ) : (
+            <div style={{ marginRight: -8 }}>
+              <InputMemberPermissionSelect
+                permissions={permissions}
+                onChange={async (
+                  permission: GroupPermission | typeof EmptySelectValue
+                ) => {
+                  try {
+                    if (permission === EmptySelectValue) {
+                      await groupUsers.delete({
+                        userId: user.id,
+                        groupId: group.id,
+                      });
+                    } else {
+                      await groupUsers.update({
+                        userId: user.id,
+                        groupId: group.id,
+                        permission,
+                      });
+                    }
+                  } catch (err) {
+                    toast.error(errToString(err));
+                    return false;
+                  }
+                  return true;
+                }}
+                disabled={!can.update || group.isExternallyManaged}
+                value={groupUser?.permission}
+              />
+            </div>
           )}
         </Flex>
       }

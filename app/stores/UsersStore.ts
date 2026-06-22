@@ -1,14 +1,11 @@
 import commandScore from "command-score";
 import invariant from "invariant";
-import deburr from "lodash/deburr";
-import differenceWith from "lodash/differenceWith";
-import filter from "lodash/filter";
-import orderBy from "lodash/orderBy";
+import { deburr, differenceWith, filter, orderBy } from "es-toolkit/compat";
 import { computed, action, runInAction } from "mobx";
-import { UserRole } from "@shared/types";
+import type { UserRole } from "@shared/types";
 import User from "~/models/User";
 import { client } from "~/utils/ApiClient";
-import RootStore from "./RootStore";
+import type RootStore from "./RootStore";
 import Store, { RPCAction } from "./base/Store";
 
 export default class UsersStore extends Store<User> {

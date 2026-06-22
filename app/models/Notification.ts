@@ -1,5 +1,6 @@
-import { TFunction } from "i18next";
+import type { TFunction } from "i18next";
 import { action, computed, observable } from "mobx";
+import type { NotificationData } from "@shared/types";
 import { NotificationEventType } from "@shared/types";
 import {
   collectionPath,
@@ -15,8 +16,51 @@ import Model from "./base/Model";
 import Field from "./decorators/Field";
 import Relation from "./decorators/Relation";
 
+export type NotificationFilter =
+  | "all"
+  | "mentions"
+  | "comments"
+  | "reactions"
+  | "documents"
+  | "collections"
+  | "system";
+
 class Notification extends Model {
   static modelName = "Notification";
+
+  static filterCategories: Record<NotificationFilter, NotificationEventType[]> =
+    {
+      all: [],
+      mentions: [
+        NotificationEventType.MentionedInDocument,
+        NotificationEventType.MentionedInComment,
+        NotificationEventType.GroupMentionedInDocument,
+        NotificationEventType.GroupMentionedInComment,
+      ],
+      comments: [
+        NotificationEventType.CreateComment,
+        NotificationEventType.ResolveComment,
+        NotificationEventType.ReactionsCreate,
+      ],
+      reactions: [NotificationEventType.ReactionsCreate],
+      documents: [
+        NotificationEventType.PublishDocument,
+        NotificationEventType.UpdateDocument,
+        NotificationEventType.CreateRevision,
+        NotificationEventType.AddUserToDocument,
+        NotificationEventType.RequestDocumentAccess,
+      ],
+      collections: [
+        NotificationEventType.CreateCollection,
+        NotificationEventType.AddUserToCollection,
+      ],
+      system: [
+        NotificationEventType.InviteAccepted,
+        NotificationEventType.Onboarding,
+        NotificationEventType.Features,
+        NotificationEventType.ExportCompleted,
+      ],
+    };
 
   /**
    * The date the notification was marked as read.
@@ -31,6 +75,20 @@ class Notification extends Model {
   @Field
   @observable
   archivedAt: Date | null;
+
+  /**
+   * Request ID on notifications for access requests.
+   */
+  @Field
+  @observable
+  accessRequestId?: string;
+
+  /**
+   * Status of the associated access request.
+   */
+  @Field
+  @observable
+  accessRequestStatus?: string;
 
   /**
    * The user that triggered the notification.
@@ -74,6 +132,11 @@ class Notification extends Model {
   event: NotificationEventType;
 
   /**
+   * Additional data associated with the notification.
+   */
+  data: NotificationData;
+
+  /**
    * Mark the notification as read or unread
    *
    * @returns A promise that resolves when the notification has been saved.
@@ -100,6 +163,21 @@ class Notification extends Model {
   }
 
   /**
+   * Archive the notification
+   *
+   * @returns A promise that resolves when the notification has been archived.
+   */
+  @action
+  archive() {
+    if (this.archivedAt) {
+      return;
+    }
+
+    this.archivedAt = new Date();
+    return this.save();
+  }
+
+  /**
    * Returns translated text that describes the notification
    *
    * @param t - The translation function
@@ -117,14 +195,29 @@ class Notification extends Model {
       case NotificationEventType.MentionedInDocument:
       case NotificationEventType.MentionedInComment:
         return t("mentioned you in");
+      case NotificationEventType.GroupMentionedInComment:
+      case NotificationEventType.GroupMentionedInDocument:
+        return t("mentioned your group in");
       case NotificationEventType.CreateComment:
         return t("left a comment on");
       case NotificationEventType.ResolveComment:
         return t("resolved a comment on");
+      case NotificationEventType.ReactionsCreate:
+        return t("reacted {{ emoji }} to your comment on", {
+          emoji: this.data.emoji,
+        });
       case NotificationEventType.AddUserToDocument:
         return t("shared");
       case NotificationEventType.AddUserToCollection:
         return t("invited you to");
+      case NotificationEventType.RequestDocumentAccess:
+        if (this.accessRequestStatus === "approved") {
+          return t("was granted access to");
+        }
+        if (this.accessRequestStatus === "dismissed") {
+          return t("requested access to");
+        }
+        return t("is requesting access to");
       default:
         return this.event;
     }
@@ -165,15 +258,19 @@ class Notification extends Model {
         const collection = this.collectionId
           ? this.store.rootStore.collections.get(this.collectionId)
           : undefined;
-        return collection ? collectionPath(collection.path) : "";
+        return collection ? collectionPath(collection) : "";
       }
+      case NotificationEventType.RequestDocumentAccess:
       case NotificationEventType.AddUserToDocument:
+      case NotificationEventType.GroupMentionedInDocument:
       case NotificationEventType.MentionedInDocument: {
         return this.document?.path;
       }
+      case NotificationEventType.GroupMentionedInComment:
       case NotificationEventType.MentionedInComment:
       case NotificationEventType.ResolveComment:
-      case NotificationEventType.CreateComment: {
+      case NotificationEventType.CreateComment:
+      case NotificationEventType.ReactionsCreate: {
         return this.document && this.comment
           ? commentPath(this.document, this.comment)
           : this.document?.path;

@@ -1,5 +1,4 @@
 import Router from "koa-router";
-
 import { Op, Sequelize } from "sequelize";
 import auth from "@server/middlewares/authentication";
 import { transaction } from "@server/middlewares/transaction";
@@ -7,11 +6,11 @@ import validate from "@server/middlewares/validate";
 import { Document, Event, UserMembership } from "@server/models";
 import { authorize } from "@server/policies";
 import {
-  presentDocument,
+  presentDocuments,
   presentMembership,
   presentPolicies,
 } from "@server/presenters";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
 import pagination from "../middlewares/pagination";
 import * as T from "./schema";
 
@@ -25,7 +24,7 @@ router.post(
   async (ctx: APIContext<T.UserMembershipsListReq>) => {
     const { user } = ctx.state.auth;
 
-    const memberships = await UserMembership.findAll({
+    const memberships = await UserMembership.scope("withUser").findAll({
       where: {
         userId: user.id,
         documentId: {
@@ -46,14 +45,8 @@ router.post(
     const documentIds = memberships
       .map((p) => p.documentId)
       .filter(Boolean) as string[];
-    const documents = await Document.scope([
-      "withDrafts",
-      { method: ["withMembership", user.id] },
-      { method: ["withCollectionPermissions", user.id] },
-    ]).findAll({
-      where: {
-        id: documentIds,
-      },
+    const documents = await Document.findByIds(documentIds, {
+      userId: user.id,
     });
 
     const policies = presentPolicies(user, [...documents, ...memberships]);
@@ -62,9 +55,7 @@ router.post(
       pagination: ctx.state.pagination,
       data: {
         memberships: memberships.map(presentMembership),
-        documents: await Promise.all(
-          documents.map((document: Document) => presentDocument(ctx, document))
-        ),
+        documents: await presentDocuments(ctx, documents),
       },
       policies,
     };
@@ -81,9 +72,12 @@ router.post(
     const { transaction } = ctx.state;
 
     const { user } = ctx.state.auth;
-    const membership = await UserMembership.findByPk(id, {
+    const membership = await UserMembership.scope("withUser").findByPk(id, {
       transaction,
-      lock: transaction.LOCK.UPDATE,
+      lock: {
+        level: transaction.LOCK.UPDATE,
+        of: UserMembership,
+      },
       rejectOnEmpty: true,
     });
     authorize(user, "update", membership);

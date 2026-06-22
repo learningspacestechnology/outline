@@ -1,5 +1,5 @@
 import { Team, User } from "@server/models";
-import { Event, TeamEvent, UserEvent } from "@server/types";
+import type { Event, TeamEvent, UserEvent } from "@server/types";
 import UploadTeamAvatarTask from "../tasks/UploadTeamAvatarTask";
 import UploadUserAvatarTask from "../tasks/UploadUserAvatarTask";
 import BaseProcessor from "./BaseProcessor";
@@ -17,7 +17,7 @@ export default class AvatarProcessor extends BaseProcessor {
       });
 
       if (user.avatarUrl) {
-        await UploadUserAvatarTask.schedule({
+        await new UploadUserAvatarTask().schedule({
           userId: event.userId,
           avatarUrl: user.avatarUrl,
         });
@@ -30,7 +30,7 @@ export default class AvatarProcessor extends BaseProcessor {
       });
 
       if (team.avatarUrl) {
-        await UploadTeamAvatarTask.schedule({
+        await new UploadTeamAvatarTask().schedule({
           teamId: event.teamId,
           avatarUrl: team.avatarUrl,
         });

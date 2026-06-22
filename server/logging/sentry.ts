@@ -1,6 +1,6 @@
 import * as Sentry from "@sentry/node";
 import env from "@server/env";
-import { AppContext } from "@server/types";
+import type { AppContext } from "@server/types";
 
 if (env.SENTRY_DSN) {
   Sentry.init({
@@ -25,10 +25,29 @@ if (env.SENTRY_DSN) {
       "AuthRedirectError",
       "UserSuspendedError",
       "TooManyRequestsError",
+
+      // Client disconnects
+      "Premature close",
     ],
+    beforeSend(event) {
+      try {
+        switch (event.level) {
+          case "warning":
+            // Sample warnings to reduce noise
+            if (Math.random() < 0.1) {
+              return null;
+            }
+            break;
+        }
+        return event;
+      } catch (_) {
+        return event;
+      }
+    },
   });
 }
 
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export function requestErrorHandler(error: any, ctx: AppContext) {
   // we don't need to report every time a request stops to the bug tracker
   if (error.code === "EPIPE" || error.code === "ECONNRESET") {
@@ -60,13 +79,11 @@ export function requestErrorHandler(error: any, ctx: AppContext) {
         });
       }
 
-      scope.addEventProcessor(function (event) {
-        return Sentry.Handlers.parseRequest(event, ctx.request);
-      });
+      scope.setSDKProcessingMetadata({ request: ctx.req });
       Sentry.captureException(error);
     });
   } else if (env.ENVIRONMENT !== "test") {
-    // eslint-disable-next-line no-console
+    // oxlint-disable-next-line no-console
     console.error(error);
   }
 }

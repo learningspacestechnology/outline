@@ -2,10 +2,16 @@ import {
   makeBlockMathInputRule,
   mathSchemaSpec,
 } from "@benrbray/prosemirror-math";
-import { PluginSimple } from "markdown-it";
-import { NodeSpec, NodeType, Node as ProsemirrorNode } from "prosemirror-model";
-import { Command, TextSelection } from "prosemirror-state";
-import { MarkdownSerializerState } from "../lib/markdown/serializer";
+import type { PluginSimple } from "markdown-it";
+import type {
+  NodeSpec,
+  NodeType,
+  Node as ProsemirrorNode,
+} from "prosemirror-model";
+import type { Command } from "prosemirror-state";
+import { TextSelection } from "prosemirror-state";
+import type { MarkdownSerializerState } from "../lib/markdown/serializer";
+import { escapeRawTableCell } from "../lib/markdown/tableCell";
 import mathRule, { REGEX_BLOCK_MATH_DOLLARS } from "../rules/math";
 import Node from "./Node";
 
@@ -41,8 +47,14 @@ export default class MathBlock extends Node {
   }
 
   toMarkdown(state: MarkdownSerializerState, node: ProsemirrorNode) {
+    // Block content bypasses esc(), so when inside a table cell escape it here
+    // so it cannot break out of the column.
+    const content = state.inTable
+      ? escapeRawTableCell(node.textContent)
+      : node.textContent;
+
     state.write("$$\n");
-    state.text(node.textContent, false);
+    state.text(content, false);
     state.ensureNewLine();
     state.write("$$");
     state.closeBlock(node);

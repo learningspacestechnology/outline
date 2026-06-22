@@ -1,14 +1,18 @@
 import { computed, observable } from "mobx";
+import type { NavigationNode, PublicTeam } from "@shared/types";
+import type SharesStore from "~/stores/SharesStore";
 import Collection from "./Collection";
 import Document from "./Document";
 import User from "./User";
 import Model from "./base/Model";
 import Field from "./decorators/Field";
 import Relation from "./decorators/Relation";
-import { Searchable } from "./interfaces/Searchable";
+import type { Searchable } from "./interfaces/Searchable";
 
 class Share extends Model implements Searchable {
   static modelName = "Share";
+
+  store: SharesStore;
 
   @Field
   @observable
@@ -45,6 +49,12 @@ class Share extends Model implements Searchable {
   domain: string;
 
   @observable
+  sourceTitle: string;
+
+  @observable
+  sourcePath: string;
+
+  @observable
   documentTitle: string;
 
   @observable
@@ -60,6 +70,28 @@ class Share extends Model implements Searchable {
   @observable
   allowIndexing: boolean;
 
+  @Field
+  @observable
+  allowSubscriptions: boolean;
+
+  @Field
+  @observable
+  showLastUpdated: boolean;
+
+  @Field
+  @observable
+  showTOC: boolean;
+
+  /** Custom branding title to display on the shared page, supersedes team name. */
+  @Field
+  @observable
+  title: string | null;
+
+  /** Custom branding icon URL to display on the shared page, supersedes team avatar. */
+  @Field
+  @observable
+  iconUrl: string | null;
+
   @observable
   views: number;
 
@@ -68,8 +100,36 @@ class Share extends Model implements Searchable {
   createdBy: User;
 
   @computed
+  get sourcePathWithFallback(): string {
+    return this.sourcePath ?? this.documentUrl;
+  }
+
+  @computed
   get searchContent(): string[] {
-    return [this.document?.title ?? this.documentTitle];
+    return [this.sourceTitle ?? this.documentTitle];
+  }
+
+  @computed
+  get searchSuppressed(): boolean {
+    return false;
+  }
+
+  @computed
+  get sharedCache() {
+    return (
+      this.store.sharedCache.get(this.id) ??
+      this.store.sharedCache.get(this.urlId)
+    );
+  }
+
+  @computed
+  get team(): PublicTeam | undefined {
+    return this.sharedCache?.team;
+  }
+
+  @computed
+  get tree(): NavigationNode | undefined {
+    return this.sharedCache?.sharedTree ?? undefined;
   }
 }
 

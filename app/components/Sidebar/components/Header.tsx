@@ -1,7 +1,7 @@
 import { CollapsedIcon } from "outline-icons";
 import * as React from "react";
 import styled, { keyframes } from "styled-components";
-import { s } from "@shared/styles";
+import { extraArea, s } from "@shared/styles";
 import usePersistedState from "~/hooks/usePersistedState";
 import { undraggableOnDesktop } from "~/styles";
 
@@ -41,7 +41,7 @@ export const Header: React.FC<Props> = ({ id, title, children }: Props) => {
       <H3>
         <Button onClick={handleClick} disabled={!id}>
           {title}
-          {id && <Disclosure expanded={expanded} size={20} />}
+          {id && <Disclosure $expanded={expanded} size={20} />}
         </Button>
       </H3>
       {expanded && (firstRender ? children : <Fade>{children}</Fade>)}
@@ -71,17 +71,19 @@ const Button = styled.button`
   font-size: 13px;
   font-weight: 600;
   user-select: none;
-  color: ${s("textTertiary")};
+  color: ${s("sidebarText")};
+  position: relative;
   letter-spacing: 0.03em;
   margin: 0;
-  padding: 4px 2px 4px 12px;
-  height: 22px;
+  padding-block: 4px;
+  padding-inline: 12px 2px;
   border: 0;
   background: none;
   border-radius: 4px;
   -webkit-appearance: none;
   transition: all 100ms ease;
   ${undraggableOnDesktop()}
+  ${extraArea(4)}
 
   &:not(:disabled):hover,
   &:not(:disabled):active {
@@ -90,16 +92,24 @@ const Button = styled.button`
   }
 `;
 
-const Disclosure = styled(CollapsedIcon)<{ expanded?: boolean }>`
-  transition: opacity 100ms ease, transform 100ms ease, fill 50ms !important;
-  ${({ expanded }) => !expanded && "transform: rotate(-90deg);"};
+const Disclosure = styled(CollapsedIcon)<{ $expanded?: boolean }>`
+  transition:
+    opacity 100ms ease,
+    transform 100ms ease,
+    fill 50ms !important;
+  ${(props) => !props.$expanded && "transform: rotate(-90deg);"};
   opacity: 0;
+
+  [dir="rtl"] & {
+    ${(props) => !props.$expanded && "transform: rotate(90deg);"};
+  }
 `;
 
 const H3 = styled.h3`
   margin: 0;
 
-  &:hover {
+  &:hover,
+  &:focus-within {
     ${Disclosure} {
       opacity: 1;
     }

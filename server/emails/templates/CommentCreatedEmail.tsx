@@ -1,11 +1,13 @@
 import * as React from "react";
 import { NotificationEventType } from "@shared/types";
-import { Collection, Comment, Document } from "@server/models";
+import type { Collection } from "@server/models";
+import { Comment, Document } from "@server/models";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import NotificationSettingsHelper from "@server/models/helpers/NotificationSettingsHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import { can } from "@server/policies";
-import BaseEmail, { EmailMessageCategory, EmailProps } from "./BaseEmail";
+import type { EmailProps } from "./BaseEmail";
+import BaseEmail, { EmailMessageCategory } from "./BaseEmail";
 import Body from "./components/Body";
 import Button from "./components/Button";
 import Diff from "./components/Diff";
@@ -66,7 +68,7 @@ export default class CommentCreatedEmail extends BaseEmail<
     }
 
     const parentComment = comment.parentCommentId
-      ? (await comment.$get("parentComment")) ?? undefined
+      ? ((await comment.$get("parentComment")) ?? undefined)
       : undefined;
 
     const body = await this.htmlForData(
@@ -102,15 +104,16 @@ export default class CommentCreatedEmail extends BaseEmail<
         ? commentText
         : `${commentText.slice(0, MAX_SUBJECT_CONTENT)}...`;
 
-    return `${parentComment ? "Re: " : ""}New comment on “${
-      document.titleWithDefault
-    }” - ${trimmedText}`;
+    return `${parentComment ? this.t("Re") + ": " : ""}${this.t(
+      "New comment on “{{ documentTitle }}” - {{ trimmedText }}",
+      { documentTitle: document.titleWithDefault, trimmedText }
+    )}`;
   }
 
   protected preview({ isReply, actorName }: Props): string {
     return isReply
-      ? `${actorName} replied in a thread`
-      : `${actorName} commented on the document`;
+      ? this.t("{{ actorName }} replied in a thread", { actorName })
+      : this.t("{{ actorName }} commented on the document", { actorName });
   }
 
   protected fromName({ actorName }: Props): string {
@@ -134,12 +137,23 @@ export default class CommentCreatedEmail extends BaseEmail<
     commentId,
     collection,
   }: Props): string {
-    return `
-${actorName} ${isReply ? "replied to a thread in" : "commented on"} "${
-      document.titleWithDefault
-    }"${collection?.name ? `in the ${collection.name} collection` : ""}.
+    const action = isReply
+      ? this.t("{{ actorName }} replied to a thread in “{{ documentTitle }}”", {
+          actorName,
+          documentTitle: document.titleWithDefault,
+        })
+      : this.t("{{ actorName }} commented on “{{ documentTitle }}”", {
+          actorName,
+          documentTitle: document.titleWithDefault,
+        });
+    const inCollection = collection?.name
+      ? ` ${this.t("in the {{ collectionName }} collection", { collectionName: collection.name })}`
+      : "";
 
-Open Thread: ${teamUrl}${document.url}?commentId=${commentId}
+    return `
+${action}${inCollection}.
+
+${this.t("Open Thread")}: ${teamUrl}${document.url}?commentId=${commentId}
 `;
   }
 
@@ -159,16 +173,23 @@ Open Thread: ${teamUrl}${document.url}?commentId=${commentId}
     return (
       <EmailTemplate
         previewText={this.preview(props)}
-        goToAction={{ url: threadLink, name: "View Thread" }}
+        goToAction={{ url: threadLink, name: this.t("View Thread") }}
       >
         <Header />
 
         <Body>
           <Heading>{document.titleWithDefault}</Heading>
           <p>
-            {actorName} {isReply ? "replied to a thread in" : "commented on"}{" "}
+            {isReply
+              ? this.t("{{ actorName }} replied to a thread in", { actorName })
+              : this.t("{{ actorName }} commented on", { actorName })}{" "}
             <a href={threadLink}>{document.titleWithDefault}</a>{" "}
-            {collection?.name ? `in the ${collection.name} collection` : ""}.
+            {collection?.name
+              ? this.t("in the {{ collectionName }} collection", {
+                  collectionName: collection.name,
+                })
+              : ""}
+            .
           </p>
           {body && (
             <>
@@ -180,11 +201,14 @@ Open Thread: ${teamUrl}${document.url}?commentId=${commentId}
             </>
           )}
           <p>
-            <Button href={threadLink}>Open Thread</Button>
+            <Button href={threadLink}>{this.t("Open Thread")}</Button>
           </p>
         </Body>
 
-        <Footer unsubscribeUrl={unsubscribeUrl} />
+        <Footer
+          unsubscribeUrl={unsubscribeUrl}
+          unsubscribeText={this.t("Unsubscribe from these emails")}
+        />
       </EmailTemplate>
     );
   }

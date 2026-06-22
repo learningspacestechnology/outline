@@ -1,41 +1,48 @@
-import addressparser, { EmailAddress } from "addressparser";
-import Bull from "bull";
+import type { EmailAddress } from "addressparser";
+import addressparser from "addressparser";
+import type Bull from "bull";
 import invariant from "invariant";
-import { Node } from "prosemirror-model";
-import randomstring from "randomstring";
-import * as React from "react";
+import { t as i18nT } from "i18next";
+import { subMinutes } from "date-fns";
+import type { Node } from "prosemirror-model";
+import { toError } from "@shared/utils/error";
+import { randomString } from "@shared/random";
 import { TeamPreference } from "@shared/types";
+import { unicodeCLDRtoBCP47 } from "@shared/utils/date";
 import { Day } from "@shared/utils/time";
 import mailer from "@server/emails/mailer";
 import env from "@server/env";
 import Logger from "@server/logging/Logger";
 import Metrics from "@server/logging/Metrics";
-import { Team } from "@server/models";
+import type { Team } from "@server/models";
 import Notification from "@server/models/Notification";
 import HTMLHelper from "@server/models/helpers/HTMLHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
 import { TextHelper } from "@server/models/helpers/TextHelper";
 import { taskQueue } from "@server/queues";
-import { TaskPriority } from "@server/queues/tasks/BaseTask";
-import { NotificationMetadata } from "@server/types";
+import { TaskPriority } from "@server/queues/tasks/base/BaseTask";
+import type { NotificationMetadata } from "@server/types";
 
 export enum EmailMessageCategory {
   Authentication = "authentication",
   Invitation = "invitation",
   Notification = "notification",
   Marketing = "marketing",
+  Internal = "internal",
 }
 
 export interface EmailProps {
   /** The email address being sent to. */
   to: string | null;
+  /** The language of the receiving user in CLDR format (e.g. "en_US"). */
+  language?: string | null;
   /** The notification that triggered the email, if any. */
   notification?: Notification;
 }
 
 export default abstract class BaseEmail<
   T extends EmailProps,
-  S extends Record<string, any> | void = void
+  S extends Record<string, unknown> | void = void,
 > {
   private props: T;
   private metadata?: NotificationMetadata;
@@ -67,7 +74,7 @@ export default abstract class BaseEmail<
 
     // Ideally we'd use EmailTask.schedule here but importing creates a circular
     // dependency so we're pushing onto the task queue in the expected format
-    return taskQueue.add(
+    return taskQueue().add(
       {
         name: "EmailTask",
         props: {
@@ -144,12 +151,21 @@ export default abstract class BaseEmail<
       ? await Notification.emailReferences(notification)
       : undefined;
 
+    // Check if notification is considerably delayed and annotate
+    // the subject. This is incase of extended downtime or queue backlogs
+    let subject = this.subject(data);
+    if (notification) {
+      if (notification.createdAt < subMinutes(new Date(), 30)) {
+        subject = `${this.t("Delayed notification")}: ${subject}`;
+      }
+    }
+
     try {
       await mailer.sendMail({
         to: this.props.to,
         replyTo: this.replyTo?.(data),
         from: this.from(data),
-        subject: this.subject(data),
+        subject,
         messageId,
         references,
         previewText: this.preview(data),
@@ -162,6 +178,7 @@ export default abstract class BaseEmail<
         text: this.renderAsText(data),
         headCSS: this.headCSS?.(data),
         unsubscribeUrl: this.unsubscribeUrl?.(data),
+        tags: { category: this.category, template: templateName },
       });
       Metrics.increment("email.sent", {
         templateName,
@@ -178,7 +195,11 @@ export default abstract class BaseEmail<
         notification.emailedAt = new Date();
         await notification.save();
       } catch (err) {
-        Logger.error(`Failed to update notification`, err, this.metadata);
+        Logger.error(
+          `Failed to update notification`,
+          toError(err),
+          this.metadata
+        );
       }
     }
   }
@@ -190,6 +211,10 @@ export default abstract class BaseEmail<
     );
 
     const parsedFrom = addressparser(env.SMTP_FROM_EMAIL)[0];
+    invariant(
+      parsedFrom?.address?.includes("@"),
+      `SMTP_FROM_EMAIL is not a valid email address: "${env.SMTP_FROM_EMAIL}"`
+    );
     const domain = parsedFrom.address.split("@")[1];
     const customFromName = this.fromName?.(props);
 
@@ -200,13 +225,27 @@ export default abstract class BaseEmail<
       address:
         env.isCloudHosted &&
         this.category === EmailMessageCategory.Authentication
-          ? `noreply-${randomstring.generate(24)}@${domain}`
+          ? `noreply-${randomString(24)}@${domain}`
           : parsedFrom.address,
     };
   }
 
   private pixel(notification: Notification) {
-    return <img src={notification.pixelUrl} width="1" height="1" />;
+    return <img src={notification.pixelUrl} alt="" width="1" height="1" />;
+  }
+
+  /**
+   * Translate a string using the receiving user's language preference.
+   *
+   * @param key The translation key (plain English string).
+   * @param options Optional interpolation values.
+   * @returns The translated string.
+   */
+  protected t(key: string, options?: Record<string, unknown>): string {
+    return i18nT(key, {
+      ...options,
+      lng: unicodeCLDRtoBCP47(this.props.language ?? env.DEFAULT_LANGUAGE),
+    }) as string;
   }
 
   /**
@@ -296,7 +335,12 @@ export default abstract class BaseEmail<
       return undefined;
     }
 
-    let content = ProsemirrorHelper.toHTML(node, {
+    // Process user mentions to ensure they are uptodate with database
+    const processedNode = ProsemirrorHelper.toProsemirror(
+      await ProsemirrorHelper.processMentions(node)
+    );
+
+    let content = await ProsemirrorHelper.toHTML(processedNode, {
       centered: false,
     });
 

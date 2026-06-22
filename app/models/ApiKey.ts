@@ -1,9 +1,12 @@
 import { isPast } from "date-fns";
 import { computed, observable } from "mobx";
-import ParanoidModel from "./base/ParanoidModel";
+import Model from "./base/Model";
 import Field from "./decorators/Field";
+import User from "./User";
+import Relation from "./decorators/Relation";
+import type { Searchable } from "./interfaces/Searchable";
 
-class ApiKey extends ParanoidModel {
+class ApiKey extends Model implements Searchable {
   static modelName = "ApiKey";
 
   /** The human-readable name of this API key */
@@ -24,6 +27,10 @@ class ApiKey extends ParanoidModel {
   /** Timestamp that the API key was last used. */
   @observable
   lastActiveAt?: string;
+
+  /** The user who this API key belongs to. */
+  @Relation(() => User)
+  user: User;
 
   /** The user ID that the API key belongs to. */
   userId: string;
@@ -46,6 +53,16 @@ class ApiKey extends ParanoidModel {
       return `...${this.last4}`;
     }
     return `ol...${this.last4}`;
+  }
+
+  @computed
+  get searchContent(): string[] {
+    return [this.name, this.obfuscatedValue].filter(Boolean);
+  }
+
+  @computed
+  get searchSuppressed(): boolean {
+    return false;
   }
 }
 

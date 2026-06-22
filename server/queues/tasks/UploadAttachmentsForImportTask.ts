@@ -1,8 +1,10 @@
 import { Sema } from "async-sema";
+import { toError } from "@shared/utils/error";
 import Logger from "@server/logging/Logger";
 import { Attachment } from "@server/models";
 import FileStorage from "@server/storage/files";
-import BaseTask, { TaskPriority } from "./BaseTask";
+import { BaseTask, TaskPriority } from "./base/BaseTask";
+import env from "@server/env";
 
 const ConcurrentUploads = 5;
 
@@ -40,7 +42,10 @@ export default class UploadAttachmentsForImportTask extends BaseTask<Item[]> {
         const res = await FileStorage.storeFromUrl(
           item.url,
           attachment.key,
-          attachment.acl
+          attachment.acl,
+          {
+            timeout: env.FILE_STORAGE_IMPORT_TIMEOUT,
+          }
         );
 
         if (res) {
@@ -50,7 +55,7 @@ export default class UploadAttachmentsForImportTask extends BaseTask<Item[]> {
           });
         }
       } catch (err) {
-        Logger.error("error uploading attachments for import", err);
+        Logger.error("error uploading attachments for import", toError(err));
         throw err;
       } finally {
         sema.release();

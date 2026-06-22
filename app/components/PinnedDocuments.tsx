@@ -1,3 +1,4 @@
+import type { DragEndEvent } from "@dnd-kit/core";
 import {
   DndContext,
   closestCenter,
@@ -5,7 +6,6 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
-  DragEndEvent,
 } from "@dnd-kit/core";
 import { restrictToParentElement } from "@dnd-kit/modifiers";
 import {
@@ -17,10 +17,10 @@ import {
 import fractionalIndex from "fractional-index";
 import { AnimatePresence } from "framer-motion";
 import { observer } from "mobx-react";
-import * as React from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import styled from "styled-components";
 import breakpoint from "styled-components-breakpoint";
-import Pin from "~/models/Pin";
+import type Pin from "~/models/Pin";
 import DocumentCard from "~/components/DocumentCard";
 import useStores from "~/hooks/useStores";
 import { ResizingHeightContainer } from "./ResizingHeightContainer";
@@ -44,12 +44,12 @@ function PinnedDocuments({
   ...rest
 }: Props) {
   const { documents } = useStores();
-  const [items, setItems] = React.useState(pins.map((pin) => pin.documentId));
-  const showPlaceholderRef = React.useRef(true);
+  const [items, setItems] = useState(pins.map((pin) => pin.documentId));
+  const showPlaceholderRef = useRef(true);
   const showPlaceholder =
     placeholderCount && !items.length && showPlaceholderRef.current;
 
-  React.useEffect(() => {
+  useEffect(() => {
     setItems(pins.map((pin) => pin.documentId));
   }, [pins]);
 
@@ -65,7 +65,7 @@ function PinnedDocuments({
     })
   );
 
-  const handleDragEnd = React.useCallback(
+  const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
 
@@ -86,8 +86,8 @@ function PinnedDocuments({
                 overPos === 0
                   ? fractionalIndex(null, overIndex)
                   : activePos > overPos
-                  ? fractionalIndex(prevIndex, overIndex)
-                  : fractionalIndex(overIndex, nextIndex),
+                    ? fractionalIndex(prevIndex, overIndex)
+                    : fractionalIndex(overIndex, nextIndex),
             })
             .catch(() => setItems(existing));
 

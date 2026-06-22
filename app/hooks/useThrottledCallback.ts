@@ -1,4 +1,4 @@
-import throttle from "lodash/throttle";
+import { throttle } from "es-toolkit/compat";
 import * as React from "react";
 import useUnmount from "./useUnmount";
 
@@ -20,7 +20,9 @@ const defaultOptions: ThrottleSettings = {
  * @param dependencies The dependencies to watch for changes
  * @param options The throttle options
  */
-export default function useThrottledCallback<T extends (...args: any[]) => any>(
+export default function useThrottledCallback<
+  T extends (...args: never[]) => unknown,
+>(
   fn: T,
   wait = 250,
   dependencies: React.DependencyList = [],
@@ -28,7 +30,7 @@ export default function useThrottledCallback<T extends (...args: any[]) => any>(
 ) {
   const handler = React.useMemo(
     () => throttle<T>(fn, wait, options),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
     dependencies
   );
 

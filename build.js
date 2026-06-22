@@ -1,6 +1,6 @@
-/* eslint-disable no-console */
-/* eslint-disable @typescript-eslint/no-var-requires */
-/* eslint-disable no-undef */
+/* oxlint-disable no-console */
+/* oxlint-disable @typescript-oxlint/no-var-requires */
+/* oxlint-disable no-undef */
 const { exec } = require("child_process");
 const { readdirSync, existsSync } = require("fs");
 
@@ -46,24 +46,25 @@ async function build() {
     execAsync(
       "yarn babel --extensions .ts,.tsx --quiet -d ./build/shared ./shared"
     ),
-    ...d.map(async (plugin) => {
-      const hasServer = existsSync(`./plugins/${plugin}/server`);
-
-      if (hasServer) {
-        await execAsync(
-          `yarn babel --extensions .ts,.tsx --quiet -d "./build/plugins/${plugin}/server" "./plugins/${plugin}/server"`
-        );
-      }
-
-      const hasShared = existsSync(`./plugins/${plugin}/shared`);
-
-      if (hasShared) {
-        await execAsync(
-          `yarn babel --extensions .ts,.tsx --quiet -d "./build/plugins/${plugin}/shared" "./plugins/${plugin}/shared"`
-        );
-      }
-    }),
   ]);
+
+  for (const plugin of d) {
+    const hasServer = existsSync(`./plugins/${plugin}/server`);
+
+    if (hasServer) {
+      await execAsync(
+        `yarn babel --extensions .ts,.tsx --quiet -d "./build/plugins/${plugin}/server" "./plugins/${plugin}/server"`
+      );
+    }
+
+    const hasShared = existsSync(`./plugins/${plugin}/shared`);
+
+    if (hasShared) {
+      await execAsync(
+        `yarn babel --extensions .ts,.tsx --quiet -d "./build/plugins/${plugin}/shared" "./plugins/${plugin}/shared"`
+      );
+    }
+  }
 
   // Copy static files
   console.log("Copying static files…");

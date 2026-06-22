@@ -1,23 +1,27 @@
-import { PluginSimple } from "markdown-it";
-import { InputRule } from "prosemirror-inputrules";
-import { NodeType, MarkType, Schema } from "prosemirror-model";
-import { Command, Plugin } from "prosemirror-state";
-import { Primitive } from "utility-types";
+import type { PluginSimple } from "markdown-it";
+import type { InputRule } from "prosemirror-inputrules";
+import type { NodeType, MarkType, Schema } from "prosemirror-model";
+import type { Command, Plugin, Selection } from "prosemirror-state";
 import type { Editor } from "../../../app/editor";
+import type { SelectionToolbarMenuDescriptor } from "../types";
 
-export type CommandFactory = (attrs?: Record<string, Primitive>) => Command;
+export type CommandFactory = (attrs?: unknown, options?: unknown) => Command;
 
-export type WidgetProps = { rtl: boolean; readOnly: boolean | undefined };
+export type WidgetProps = {
+  rtl: boolean;
+  readOnly: boolean | undefined;
+  selection?: Selection;
+};
 
-export default class Extension {
-  options: any;
+export default class Extension<TOptions extends object = object> {
+  options: TOptions;
   editor: Editor;
 
-  constructor(options: Record<string, any> = {}) {
+  constructor(options: Partial<TOptions> = {}) {
     this.options = {
       ...this.defaultOptions,
       ...options,
-    };
+    } as TOptions;
   }
 
   bindEditor(editor: Editor) {
@@ -40,10 +44,15 @@ export default class Extension {
     return [];
   }
 
-  get defaultOptions() {
+  get defaultOptions(): Partial<TOptions> {
     return {};
   }
 
+  /**
+   * Whether this extension is needed in read-only mode. When false (default), pure Extension types
+   * are not instantiated and their commands are blocked. Node and Mark extensions are always
+   * instantiated for the schema regardless of this setting.
+   */
   get allowInReadOnly(): boolean {
     return false;
   }
@@ -99,5 +108,16 @@ export default class Extension {
     schema: Schema;
   }): Record<string, CommandFactory> | CommandFactory | undefined {
     return {};
+  }
+
+  /**
+   * Declares selection toolbar menus contributed by this extension. When
+   * the user selects content or clicks a node, the toolbar evaluates all
+   * registered menus in priority order and displays the first match.
+   *
+   * @returns an array of menu descriptors, or an empty array if this extension does not contribute menus.
+   */
+  selectionToolbarMenus(): SelectionToolbarMenuDescriptor[] {
+    return [];
   }
 }

@@ -1,10 +1,10 @@
-import isEmpty from "lodash/isEmpty";
+import { isEmpty } from "es-toolkit/compat";
 import { z } from "zod";
 import { BaseSchema } from "../schema";
 
 export const SearchesDeleteSchema = BaseSchema.extend({
   body: z.object({
-    id: z.string().uuid().optional(),
+    id: z.uuid().optional(),
     query: z.string().optional(),
   }),
 }).refine((req) => !(isEmpty(req.body.id) && isEmpty(req.body.query)), {
@@ -15,7 +15,7 @@ export type SearchesDeleteReq = z.infer<typeof SearchesDeleteSchema>;
 
 export const SearchesUpdateSchema = BaseSchema.extend({
   body: z.object({
-    id: z.string().uuid(),
+    id: z.uuid(),
     score: z.number().min(-1).max(1),
   }),
 });

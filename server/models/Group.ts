@@ -1,4 +1,5 @@
-import { InferAttributes, InferCreationAttributes, Op } from "sequelize";
+import type { InferAttributes, InferCreationAttributes } from "sequelize";
+import { Op } from "sequelize";
 import {
   BelongsTo,
   Column,
@@ -9,6 +10,8 @@ import {
   DataType,
   Scopes,
 } from "sequelize-typescript";
+import { GroupValidation } from "@shared/validations";
+import ExternalGroup from "./ExternalGroup";
 import GroupMembership from "./GroupMembership";
 import GroupUser from "./GroupUser";
 import Team from "./Team";
@@ -36,7 +39,7 @@ import NotContainsUrl from "./validators/NotContainsUrl";
   tableName: "groups",
   modelName: "group",
   validate: {
-    async isUniqueNameInTeam() {
+    async isUniqueNameInTeam(this: Group) {
       const foundItem = await Group.findOne({
         where: {
           teamId: this.teamId,
@@ -60,13 +63,28 @@ class Group extends ParanoidModel<
   InferAttributes<Group>,
   Partial<InferCreationAttributes<Group>>
 > {
-  @Length({ min: 0, max: 255, msg: "name must be be 255 characters or less" })
+  @Length({
+    min: 0,
+    max: GroupValidation.maxNameLength,
+    msg: `name must be ${GroupValidation.maxNameLength} characters or less`,
+  })
   @NotContainsUrl
   @Column
   name: string;
 
+  @Length({
+    min: 0,
+    max: GroupValidation.maxDescriptionLength,
+    msg: `description must be ${GroupValidation.maxDescriptionLength} characters or less`,
+  })
+  @Column(DataType.TEXT)
+  description: string;
+
   @Column
   externalId: string;
+
+  @Column(DataType.BOOLEAN)
+  disableMentions: boolean;
 
   static filterByMember(userId: string | undefined) {
     return userId
@@ -78,6 +96,9 @@ class Group extends ParanoidModel<
 
   @HasMany(() => GroupUser, "groupId")
   groupUsers: GroupUser[];
+
+  @HasMany(() => ExternalGroup, "groupId")
+  externalGroups: ExternalGroup[];
 
   @HasMany(() => GroupMembership, "groupId")
   groupMemberships: GroupMembership[];
@@ -99,7 +120,20 @@ class Group extends ParanoidModel<
   @BelongsToMany(() => User, () => GroupUser)
   users: User[];
 
-  @CounterCache(() => GroupUser, { as: "members", foreignKey: "groupId" })
+  @CounterCache(() => GroupUser, {
+    as: "members",
+    foreignKey: "groupId",
+    include: [
+      {
+        association: "user",
+        required: true,
+        attributes: [],
+        where: {
+          suspendedAt: { [Op.is]: null },
+        },
+      },
+    ],
+  })
   memberCount: Promise<number>;
 }
 

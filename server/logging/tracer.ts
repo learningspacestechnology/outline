@@ -1,7 +1,19 @@
-import tracer, { Span } from "dd-trace";
+import type { Span, Tracer } from "dd-trace";
 import env from "@server/env";
 
+interface ReportableError extends Error {
+  isReportable?: boolean;
+}
+
+/** Whether the error has been explicitly marked as non-reportable. */
+function isExplicitlyNonReportable(error: Error): error is ReportableError {
+  return (
+    "isReportable" in error && (error as ReportableError).isReportable === false
+  );
+}
+
 type PrivateDatadogContext = {
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any
   req: Record<string, any> & {
     _datadog?: {
       span?: Span;
@@ -9,15 +21,43 @@ type PrivateDatadogContext = {
   };
 };
 
+// dd-trace patches Node internals on require and is comparatively expensive to
+// load, so it is kept off the startup path unless APM is actually enabled. When
+// disabled we fall back to a no-op tracer that satisfies the surface consumed by
+// callers (see tracing.ts) so they don't need to branch.
+const noopSpan = {
+  addTags: () => noopSpan,
+  setTag: () => noopSpan,
+  finish: () => undefined,
+} as unknown as Span;
+
+let tracer: Tracer;
+
 // If the DataDog agent is installed and the DD_API_KEY environment variable is
-// in the environment then we can safely attempt to start the DD tracer
+// in the environment then we can safely attempt to start the DD tracer. This
+// must happen before any instrumented module is imported.
 if (env.DD_API_KEY) {
+  const ddTrace = require("dd-trace") as { default?: Tracer };
+  tracer = ddTrace.default ?? (ddTrace as unknown as Tracer);
+
   tracer.init({
     version: env.VERSION,
     service: env.DD_SERVICE,
     env: env.ENVIRONMENT,
     logInjection: true,
   });
+
+  // Disable per-middleware spans so that non-reportable errors are not captured
+  // This is also generally excessive noise
+  tracer.use("koa", { middleware: false });
+} else {
+  tracer = {
+    scope: () => ({
+      active: () => null,
+      activate: <T>(_span: Span, fn: () => T) => fn(),
+    }),
+    startSpan: () => noopSpan,
+  } as unknown as Tracer;
 }
 
 const getCurrentSpan = (): Span | null => tracer.scope().active();
@@ -29,7 +69,10 @@ const getCurrentSpan = (): Span | null => tracer.scope().active();
  * @param tags An object with the tags to add to the span
  * @param span An optional span object to add the tags to. If none provided,the current span will be used.
  */
-export function addTags(tags: Record<string, any>, span?: Span | null): void {
+export function addTags(
+  tags: Parameters<Span["addTags"]>[0],
+  span?: Span | null
+): void {
   if (tracer) {
     const currentSpan = span || getCurrentSpan();
 
@@ -52,7 +95,7 @@ export function addTags(tags: Record<string, any>, span?: Span | null): void {
 export function getRootSpanFromRequestContext(
   context: PrivateDatadogContext
 ): Span | null {
-  // eslint-disable-next-line no-undef
+  // oxlint-disable-next-line no-undef
   return context?.req?._datadog?.span ?? null;
 }
 
@@ -72,11 +115,16 @@ export function setResource(name: string) {
 
 /**
  * Mark the current active span as an error. This method wraps addTags to allow
- * safe use in environments where APM is disabled.
+ * safe use in environments where APM is disabled. Errors with isReportable set
+ * to false are skipped.
  *
- * @param error The error to add to the current span
+ * @param error The error to add to the current span.
  */
 export function setError(error: Error, span?: Span) {
+  if (isExplicitlyNonReportable(error)) {
+    return;
+  }
+
   if (tracer) {
     addTags(
       {

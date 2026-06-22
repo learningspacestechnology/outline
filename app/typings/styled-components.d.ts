@@ -3,7 +3,31 @@ import "styled-components";
 
 // and extend them!
 declare module "styled-components" {
-  interface EditorTheme {
+  interface CodeTheme {
+    code: string;
+    codeComment: string;
+    codePunctuation: string;
+    codeNumber: string;
+    codeProperty: string;
+    codeTag: string;
+    codeString: string;
+    codeClassName: string;
+    codeConstant: string;
+    codeParameter: string;
+    codeSelector: string;
+    codeAttrName: string;
+    codeAttrValue: string;
+    codeEntity: string;
+    codeKeyword: string;
+    codeFunction: string;
+    codeStatement: string;
+    codePlaceholder: string;
+    codeInserted: string;
+    codeImportant: string;
+    codeOperator: string;
+  }
+
+  interface EditorTheme extends CodeTheme {
     isDark: boolean;
     background: string;
     text: string;
@@ -29,23 +53,6 @@ declare module "styled-components" {
     textHighlight: string;
     textHighlightForeground: string;
     selected: string;
-    code: string;
-    codeComment: string;
-    codePunctuation: string;
-    codeNumber: string;
-    codeProperty: string;
-    codeTag: string;
-    codeString: string;
-    codeClassName: string;
-    codeSelector: string;
-    codeAttr: string;
-    codeEntity: string;
-    codeKeyword: string;
-    codeFunction: string;
-    codeStatement: string;
-    codePlaceholder: string;
-    codeInserted: string;
-    codeImportant: string;
     noticeInfoBackground: string;
     noticeInfoText: string;
     noticeTipBackground: string;
@@ -116,10 +123,7 @@ declare module "styled-components" {
   }
 
   export interface DefaultTheme
-    extends Colors,
-      Spacing,
-      Breakpoints,
-      EditorTheme {
+    extends Colors, Spacing, Breakpoints, EditorTheme {
     background: string;
     backgroundSecondary: string;
     backgroundTertiary: string;
@@ -137,7 +141,10 @@ declare module "styled-components" {
     textDiffDeletedBackground: string;
     placeholder: string;
     commentMarkBackground: string;
+    commentedImageOutlineLight: string;
+    commentedImageOutlineDark: string;
     sidebarBackground: string;
+    sidebarHoverBackground: string;
     sidebarActiveBackground: string;
     sidebarControlHoverBackground: string;
     sidebarDraftBorder: string;
@@ -150,15 +157,16 @@ declare module "styled-components" {
     menuItemSelected: string;
     menuBackground: string;
     menuShadow: string;
-    menuBorder?: string;
     divider: string;
     titleBarDivider: string;
     inputBorder: string;
     inputBorderFocused: string;
+    inputBackground: string;
     listItemHoverBackground: string;
     mentionBackground: string;
     mentionHoverBackground: string;
     buttonNeutralBackground: string;
+    buttonNeutralHoverBackground: string;
     buttonNeutralText: string;
     buttonNeutralBorder: string;
     tooltipBackground: string;

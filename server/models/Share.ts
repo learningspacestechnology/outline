@@ -1,8 +1,5 @@
-import {
-  InferAttributes,
-  InferCreationAttributes,
-  type SaveOptions,
-} from "sequelize";
+import type { InferAttributes, InferCreationAttributes } from "sequelize";
+import { type SaveOptions } from "sequelize";
 import {
   ForeignKey,
   BelongsTo,
@@ -18,9 +15,10 @@ import {
   BeforeUpdate,
 } from "sequelize-typescript";
 import { UrlHelper } from "@shared/utils/UrlHelper";
+import { ShareValidation } from "@shared/validations";
 import env from "@server/env";
 import { ValidationError } from "@server/errors";
-import { APIContext } from "@server/types";
+import type { APIContext } from "@server/types";
 import Collection from "./Collection";
 import Document from "./Document";
 import Team from "./Team";
@@ -28,6 +26,7 @@ import User from "./User";
 import IdModel from "./base/IdModel";
 import Fix from "./decorators/Fix";
 import IsFQDN from "./validators/IsFQDN";
+import IsUrlOrRelativePath from "./validators/IsUrlOrRelativePath";
 import Length from "./validators/Length";
 
 @DefaultScope(() => ({
@@ -37,17 +36,37 @@ import Length from "./validators/Length";
       paranoid: false,
     },
     {
+      association: "collection",
+      required: false,
+    },
+    {
       association: "document",
       required: false,
     },
     {
       association: "team",
+      required: true,
     },
   ],
 }))
 @Scopes(() => ({
   withCollectionPermissions: (userId: string) => ({
     include: [
+      {
+        attributes: [
+          "id",
+          "name",
+          "permission",
+          "sharing",
+          "urlId",
+          "teamId",
+          "deletedAt",
+        ],
+        model: Collection.scope({
+          method: ["withMembership", userId],
+        }),
+        as: "collection",
+      },
       {
         model: Document.scope([
           "withDrafts",
@@ -59,7 +78,15 @@ import Length from "./validators/Length";
         as: "document",
         include: [
           {
-            attributes: ["id", "permission", "sharing", "teamId", "deletedAt"],
+            attributes: [
+              "id",
+              "name",
+              "permission",
+              "urlId",
+              "sharing",
+              "teamId",
+              "deletedAt",
+            ],
             model: Collection.scope({
               method: ["withMembership", userId],
             }),
@@ -113,6 +140,39 @@ class Share extends IdModel<
   @IsFQDN
   @Column
   domain: string | null;
+
+  @Default(false)
+  @Column
+  allowIndexing: boolean;
+
+  @Default(true)
+  @Column
+  allowSubscriptions: boolean;
+
+  @Default(false)
+  @Column
+  showLastUpdated: boolean;
+
+  @Default(false)
+  @Column
+  showTOC: boolean;
+
+  @AllowNull
+  @Length({
+    max: ShareValidation.maxTitleLength,
+    msg: `title must be ${ShareValidation.maxTitleLength} characters or less`,
+  })
+  @Column
+  title: string | null;
+
+  @AllowNull
+  @IsUrlOrRelativePath
+  @Length({
+    max: ShareValidation.maxIconUrlLength,
+    msg: `iconUrl must be ${ShareValidation.maxIconUrlLength} characters or less`,
+  })
+  @Column
+  iconUrl: string | null;
 
   // hooks
 
@@ -178,19 +238,22 @@ class Share extends IdModel<
   @Column(DataType.UUID)
   teamId: string;
 
+  @BelongsTo(() => Collection, "collectionId")
+  collection: Collection | null;
+
+  @ForeignKey(() => Collection)
+  @Column(DataType.UUID)
+  collectionId: string | null;
+
   @BelongsTo(() => Document, "documentId")
   document: Document | null;
 
   @ForeignKey(() => Document)
   @Column(DataType.UUID)
-  documentId: string;
-
-  @Default(true)
-  @Column
-  allowIndexing: boolean;
+  documentId: string | null;
 
   revoke(ctx: APIContext) {
-    const { user } = ctx.context.auth;
+    const { user } = ctx.state.auth;
     this.revokedAt = new Date();
     this.revokedById = user.id;
     return this.saveWithCtx(ctx, undefined, { name: "revoke" });

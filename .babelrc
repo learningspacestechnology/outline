@@ -1,6 +1,11 @@
 {
   "presets": [
-    "@babel/preset-react",
+    [
+      "@babel/preset-react",
+      {
+        "runtime": "automatic"
+      }
+    ],
     "@babel/preset-env",
     "@babel/preset-typescript"
   ],
@@ -16,13 +21,21 @@
     [
       "transform-inline-environment-variables",
       {
-        "include": [
-          "SOURCE_COMMIT",
-          "SOURCE_VERSION"
-        ]
+        "include": ["SOURCE_COMMIT", "SOURCE_VERSION"]
       }
     ],
-    "tsconfig-paths-module-resolver"
+    [
+      "module-resolver",
+      {
+        "root": ["./"],
+        "alias": {
+          "@server": "./server",
+          "@shared": "./shared",
+          "~": "./app",
+          "plugins": "./plugins"
+        }
+      }
+    ]
   ],
   "env": {
     "production": {
@@ -34,16 +47,10 @@
           }
         ]
       ],
-      "ignore": [
-        "**/__mocks__",
-        "**/*.test.ts"
-      ]
+      "ignore": ["**/__mocks__", "**/*.test.ts"]
     },
     "development": {
-      "ignore": [
-        "**/__mocks__",
-        "**/*.test.ts"
-      ]
+      "ignore": ["**/__mocks__", "**/*.test.ts"]
     },
     "test": {
       "presets": [

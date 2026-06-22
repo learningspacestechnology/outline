@@ -1,34 +1,51 @@
 import { chainCommands } from "prosemirror-commands";
-import { NodeSpec, Node as ProsemirrorNode } from "prosemirror-model";
+import { InputRule } from "prosemirror-inputrules";
+import type { NodeSpec, Node as ProsemirrorNode } from "prosemirror-model";
+import { TextSelection } from "prosemirror-state";
 import {
-  addColumnAfter,
-  addRowAfter,
   columnResizing,
   deleteColumn,
   deleteRow,
   deleteTable,
   goToNextCell,
+  moveTableColumn,
+  moveTableRow,
   tableEditing,
   toggleHeader,
 } from "prosemirror-tables";
 import {
   addRowBefore,
+  addRowAfter,
   addColumnBefore,
+  addColumnAfter,
   addRowAndMoveSelection,
   setColumnAttr,
   createTable,
   exportTable,
+  distributeColumns,
   sortTable,
   setTableAttr,
   deleteColSelection,
   deleteRowSelection,
+  deleteCellSelection,
   moveOutOfTable,
+  createTableInner,
+  deleteTableIfSelected,
+  splitCellAndCollapse,
+  mergeCellsAndCollapse,
+  toggleColumnBackground,
+  toggleRowBackground,
+  toggleCellSelectionBackground,
+  toggleCellSelectionBackgroundAndCollapseSelection,
+  toggleRowBackgroundAndCollapseSelection,
+  toggleColumnBackgroundAndCollapseSelection,
 } from "../commands/table";
-import { MarkdownSerializerState } from "../lib/markdown/serializer";
-import { FixTablesPlugin } from "../plugins/FixTables";
+import type { MarkdownSerializerState } from "../lib/markdown/serializer";
+import { FixTablesPlugin } from "../plugins/FixTablesPlugin";
+import { TableLayoutPlugin } from "../plugins/TableLayoutPlugin";
 import tablesRule from "../rules/tables";
 import { EditorStyleHelper } from "../styles/EditorStyleHelper";
-import { TableLayout } from "../types";
+import type { TableLayout } from "../types";
 import Node from "./Node";
 import { TableView } from "./TableView";
 
@@ -75,15 +92,26 @@ export default class Table extends Node {
       setTableAttr,
       sortTable,
       addColumnBefore,
-      addColumnAfter: () => addColumnAfter,
+      addColumnAfter,
       deleteColumn: () => deleteColumn,
       addRowBefore,
-      addRowAfter: () => addRowAfter,
+      addRowAfter,
+      moveTableRow,
+      moveTableColumn,
       deleteRow: () => deleteRow,
       deleteTable: () => deleteTable,
       exportTable,
+      distributeColumns,
       toggleHeaderColumn: () => toggleHeader("column"),
       toggleHeaderRow: () => toggleHeader("row"),
+      mergeCells: () => mergeCellsAndCollapse(),
+      splitCell: () => splitCellAndCollapse(),
+      toggleRowBackground,
+      toggleRowBackgroundAndCollapseSelection,
+      toggleColumnBackground,
+      toggleColumnBackgroundAndCollapseSelection,
+      toggleCellSelectionBackground,
+      toggleCellSelectionBackgroundAndCollapseSelection,
     };
   }
 
@@ -93,12 +121,32 @@ export default class Table extends Node {
       "Shift-Tab": goToNextCell(-1),
       "Mod-Enter": addRowAndMoveSelection(),
       "Mod-Backspace": chainCommands(
+        deleteCellSelection,
         deleteColSelection(),
-        deleteRowSelection()
+        deleteRowSelection(),
+        deleteTableIfSelected()
+      ),
+      Backspace: chainCommands(
+        deleteCellSelection,
+        deleteColSelection(),
+        deleteRowSelection(),
+        deleteTableIfSelected()
       ),
       ArrowDown: moveOutOfTable(1),
       ArrowUp: moveOutOfTable(-1),
     };
+  }
+
+  inputRules() {
+    return [
+      new InputRule(/^(\|--)$/, (state, _, start, end) => {
+        const nodes = createTableInner(state, 2, 2);
+        const tr = state.tr.replaceWith(start - 1, end, nodes).scrollIntoView();
+        const resolvedPos = tr.doc.resolve(start + 1);
+        tr.setSelection(TextSelection.near(resolvedPos));
+        return tr;
+      }),
+    ];
   }
 
   toMarkdown(state: MarkdownSerializerState, node: ProsemirrorNode) {
@@ -115,9 +163,11 @@ export default class Table extends Node {
       // Note: Important to register columnResizing before tableEditing
       columnResizing({
         View: TableView,
+        defaultCellMinWidth: 25,
       }),
       tableEditing(),
       new FixTablesPlugin(),
+      new TableLayoutPlugin(),
     ];
   }
 }

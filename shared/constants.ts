@@ -1,9 +1,11 @@
+import type { TeamPreferences, UserPreferences } from "./types";
 import {
   TOCPosition,
   TeamPreference,
-  TeamPreferences,
   UserPreference,
-  UserPreferences,
+  EmailDisplay,
+  CommentingAccess,
+  NotificationBadgeType,
 } from "./types";
 
 export const MAX_AVATAR_DISPLAY = 6;
@@ -15,6 +17,12 @@ export const Pagination = {
   sidebarLimit: 10,
 };
 
+export const CSRF = {
+  cookieName: "csrfToken",
+  headerName: "x-csrf-token",
+  fieldName: "_csrf",
+};
+
 export const TeamPreferenceDefaults: TeamPreferences = {
   [TeamPreference.SeamlessEdit]: true,
   [TeamPreference.ViewersCanExport]: true,
@@ -23,9 +31,13 @@ export const TeamPreferenceDefaults: TeamPreferences = {
   [TeamPreference.MembersCanDeleteAccount]: true,
   [TeamPreference.PreviewsInEmails]: true,
   [TeamPreference.PublicBranding]: false,
-  [TeamPreference.Commenting]: true,
+  [TeamPreference.Commenting]: CommentingAccess.Members,
   [TeamPreference.CustomTheme]: undefined,
   [TeamPreference.TocPosition]: TOCPosition.Left,
+  [TeamPreference.PreventDocumentEmbedding]: false,
+  [TeamPreference.EmailDisplay]: EmailDisplay.Members,
+  [TeamPreference.MCP]: true,
+  [TeamPreference.DisabledEmbeds]: [],
 };
 
 export const UserPreferenceDefaults: UserPreferences = {
@@ -34,4 +46,5 @@ export const UserPreferenceDefaults: UserPreferences = {
   [UserPreference.CodeBlockLineNumers]: true,
   [UserPreference.SortCommentsByOrderInDocument]: true,
   [UserPreference.EnableSmartText]: true,
+  [UserPreference.NotificationBadge]: NotificationBadgeType.Count,
 };

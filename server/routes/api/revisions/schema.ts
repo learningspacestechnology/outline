@@ -1,4 +1,4 @@
-import isEmpty from "lodash/isEmpty";
+import { isEmpty } from "es-toolkit/compat";
 import { z } from "zod";
 import { RevisionValidation } from "@shared/validations";
 import { Revision } from "@server/models";
@@ -7,28 +7,19 @@ import { BaseSchema } from "@server/routes/api/schema";
 export const RevisionsInfoSchema = BaseSchema.extend({
   body: z
     .object({
-      id: z.string().uuid().optional(),
-      documentId: z.string().uuid().optional(),
+      id: z.uuid().optional(),
+      documentId: z.uuid().optional(),
     })
     .refine((req) => !(isEmpty(req.id) && isEmpty(req.documentId)), {
-      message: "id or documentId is required",
+      error: "id or documentId is required",
     }),
 });
 
 export type RevisionsInfoReq = z.infer<typeof RevisionsInfoSchema>;
 
-export const RevisionsDiffSchema = BaseSchema.extend({
-  body: z.object({
-    id: z.string().uuid(),
-    compareToId: z.string().uuid().optional(),
-  }),
-});
-
-export type RevisionsDiffReq = z.infer<typeof RevisionsDiffSchema>;
-
 export const RevisionsUpdateSchema = BaseSchema.extend({
   body: z.object({
-    id: z.string().uuid(),
+    id: z.uuid(),
 
     name: z
       .string()
@@ -50,12 +41,28 @@ export const RevisionsListSchema = z.object({
     sort: z
       .string()
       .refine((val) => Object.keys(Revision.getAttributes()).includes(val), {
-        message: "Invalid sort parameter",
+        error: "Invalid sort parameter",
       })
-      .default("createdAt"),
+      .prefault("createdAt"),
 
-    documentId: z.string().uuid(),
+    documentId: z.uuid(),
   }),
 });
 
 export type RevisionsListReq = z.infer<typeof RevisionsListSchema>;
+
+export const RevisionsDeleteSchema = BaseSchema.extend({
+  body: z.object({
+    id: z.uuid(),
+  }),
+});
+
+export type RevisionsDeleteReq = z.infer<typeof RevisionsDeleteSchema>;
+
+export const RevisionsExportSchema = BaseSchema.extend({
+  body: z.object({
+    id: z.uuid(),
+  }),
+});
+
+export type RevisionsExportReq = z.infer<typeof RevisionsExportSchema>;

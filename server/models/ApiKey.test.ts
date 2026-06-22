@@ -1,4 +1,5 @@
-import randomstring from "randomstring";
+import { randomString } from "@shared/random";
+import { Scope } from "@shared/types";
 import { buildApiKey } from "@server/test/factories";
 import ApiKey from "./ApiKey";
 
@@ -7,7 +8,7 @@ describe("#ApiKey", () => {
     it("should match an API secret", async () => {
       const apiKey = await buildApiKey();
       expect(ApiKey.match(apiKey.value!)).toBe(true);
-      expect(ApiKey.match(`${randomstring.generate(38)}`)).toBe(true);
+      expect(ApiKey.match(`${randomString(38)}`)).toBe(true);
     });
 
     it("should not match non secrets", async () => {
@@ -109,6 +110,24 @@ describe("#ApiKey", () => {
       expect(apiKey.canAccess("/api/collections.list")).toBe(true);
       expect(apiKey.canAccess("/api/documents.create")).toBe(false);
       expect(apiKey.canAccess("/api/collections.create")).toBe(false);
+    });
+
+    it("should allow MCP access for scoped API keys", async () => {
+      const apiKey = await buildApiKey({
+        name: "Dev",
+        scope: [Scope.Read],
+      });
+
+      expect(apiKey.canAccess("/mcp")).toBe(true);
+      expect(apiKey.canAccess("/mcp/")).toBe(true);
+    });
+
+    it("should allow MCP access for unscoped API keys", async () => {
+      const apiKey = await buildApiKey({
+        name: "Dev",
+      });
+
+      expect(apiKey.canAccess("/mcp")).toBe(true);
     });
   });
 });
