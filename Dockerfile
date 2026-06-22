@@ -7,8 +7,13 @@ RUN apt-get update && \
     apt-get install -y python3 build-essential wget && \
     rm -rf /var/lib/apt/lists/*
 
+# Use the Yarn version pinned in package.json's "packageManager" field (Yarn 4
+# via Corepack); the node image ships classic Yarn 1.x which refuses to run.
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable
+
 # Copy package files first for better caching
-COPY package.json yarn.lock ./
+COPY package.json yarn.lock .yarnrc.yml ./
 RUN yarn install
 
 # Copy the rest of the application
