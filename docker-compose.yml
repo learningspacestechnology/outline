@@ -40,48 +40,36 @@ services:
       - "5432"
     volumes:
       - database-data:/var/lib/postgresql/data
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "pg_isready", "-d", "outlinedb", "-U", "outlinedbadmin"]
       interval: 30s
       timeout: 20s
       retries: 3
-      restart: unless-stopped
 #    environment:
 #      POSTGRES_USER: ${POSTGRES_USER}
 #      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
 #      POSTGRES_DB: ${POSTGRES_DB}
 
-  https-portal:
-    container_name: https-portal
-    image: steveltn/https-portal
-    env_file: ./docker.env
+  nginx:
+    container_name: nginx
+    image: nginx:1.27-alpine
     ports:
       - '80:80'
       - '443:443'
-    links:
-      - outline
     restart: always
     volumes:
-      - https-portal-data:/var/lib/https-portal
-      - ./certs:/var/lib/https-portal/certs
-      - ./nginx-conf:/var/lib/https-portal/nginx-conf
+      # Reverse-proxy + TLS config (plain nginx, no ERB templating).
+      - ./nginx-conf/default.conf:/etc/nginx/conf.d/default.conf:ro
+      # Certs issued on the host by scripts/letsencrypt (DNS-01 / TSIG).
+      - ./certs:/etc/nginx/certs:ro
     depends_on:
       - outline
     healthcheck:
-      test: ["CMD", "service", "nginx", "status"]
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost/healthz"]
       interval: 30s
       timeout: 20s
       retries: 3
-    environment:
-      DOMAINS: 'lst.is.ed.ac.uk -> http://outline:3000'
-      STAGE: 'local'
-      HTTPS_PORTAL_STAGE: 'local'
-      WEBSOCKET: 'true'
-      CLIENT_MAX_BODY_SIZE: '0'
-      WEBSOCKET_SUPPORT: 'true'
-      KEEPALIVE_TIMEOUT: '70s'
-      PROXY_READ_TIMEOUT: '60s'
-      PROXY_SEND_TIMEOUT: '60s'
 
   portainer:
     container_name: portainer
@@ -99,7 +87,6 @@ services:
       - TZ=Europe/London
 
 volumes:
-  https-portal-data:
   storage-data:
   database-data:
   portainer-data:
