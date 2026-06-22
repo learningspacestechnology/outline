@@ -23,3 +23,10 @@ node_modules
 **/*.test.jsx
 **/__tests__
 **/__mocks__
+
+# Secrets and host-only deployment files — must never be baked into the image.
+**/*.key
+**/*.crt
+certs
+scripts/letsencrypt
+nginx-conf
