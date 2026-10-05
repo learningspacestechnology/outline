@@ -1,12 +1,9 @@
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
-import { Op, Transaction } from "sequelize";
-import type { FindOptions, WhereOptions } from "sequelize";
+import { Transaction } from "sequelize";
 import { sequelize } from "@server/storage/database";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { CommentStatusFilter } from "@shared/types";
-import type { CommentMark } from "@shared/utils/ProsemirrorHelper";
 import { commentParser } from "@server/editor";
 import { DocumentHelper } from "@server/models/helpers/DocumentHelper";
 import { ProsemirrorHelper } from "@server/models/helpers/ProsemirrorHelper";
@@ -25,25 +22,20 @@ import {
 import { ValidationError } from "@server/errors";
 
 /**
- * Presents a comment with a plain-text rendering of its content so that
+ * Presents a comment with a markdown rendering of its content so that
  * MCP consumers (typically AI agents) can read it without parsing
- * ProseMirror JSON.
+ * ProseMirror JSON, which is omitted from the response.
  *
  * @param comment - the comment model instance.
- * @param commentMarks - optional precomputed comment marks to avoid reparsing.
- * @returns the presented comment with an additional `text` field.
+ * @returns the presented comment with a markdown `text` field.
  */
-function presentCommentWithText(
-  comment: Comment,
-  commentMarks?: CommentMark[]
-) {
-  const presented = presentComment(comment, {
+function presentCommentWithText(comment: Comment) {
+  const { data: _data, ...presented } = presentComment(comment, {
     includeAnchorText: true,
-    commentMarks,
   });
   return {
     ...presented,
-    text: comment.toPlainText(),
+    text: comment.toMarkdown(),
   };
 }
 
@@ -114,105 +106,33 @@ export function commentTools(server: McpServer, scopes: string[]) {
         ) => {
           try {
             const user = getActorFromContext(extra);
-            const effectiveOffset = offset ?? 0;
-            const effectiveLimit = limit ?? 25;
 
-            const statusQuery: WhereOptions<Comment>[] = [];
-            if (statusFilter?.includes(CommentStatusFilter.Resolved)) {
-              statusQuery.push({ resolvedById: { [Op.not]: null } });
-            }
-            if (statusFilter?.includes(CommentStatusFilter.Unresolved)) {
-              statusQuery.push({ resolvedById: null });
-            }
-
-            const and: WhereOptions<Comment>[] = [];
+            let document: Document | null = null;
             if (documentId) {
-              and.push({ documentId });
-            }
-            if (parentCommentId) {
-              and.push({ parentCommentId });
-            }
-            if (statusQuery.length) {
-              and.push({ [Op.or]: statusQuery });
-            }
-            const where: WhereOptions<Comment> = {
-              [Op.and]: and,
-            };
-
-            const params: FindOptions<Comment> = {
-              where,
-              order: [["createdAt", "DESC"]],
-              offset: effectiveOffset,
-              limit: effectiveLimit,
-            };
-
-            let comments: Comment[];
-
-            if (documentId) {
-              const document = await Document.findByPk(documentId, {
+              document = await Document.findByPk(documentId, {
                 userId: user.id,
               });
               authorize(user, "read", document);
-
-              comments = await Comment.findAll(params);
-              comments.forEach((comment) => (comment.document = document!));
             } else if (collectionId) {
               const collection = await Collection.findByPk(collectionId, {
                 userId: user.id,
               });
               authorize(user, "read", collection);
-
-              comments = await Comment.findAll({
-                include: [
-                  {
-                    model: Document,
-                    required: true,
-                    where: {
-                      teamId: user.teamId,
-                      collectionId,
-                    },
-                  },
-                ],
-                ...params,
-              });
-            } else {
-              const accessibleCollectionIds = await user.collectionIds();
-
-              comments = await Comment.findAll({
-                include: [
-                  {
-                    model: Document,
-                    required: true,
-                    where: {
-                      teamId: user.teamId,
-                      collectionId: { [Op.in]: accessibleCollectionIds },
-                    },
-                  },
-                ],
-                ...params,
-              });
             }
 
-            // Precompute comment marks per document to avoid reparsing
-            // the same document for every comment.
-            const marksCache = new Map<string, CommentMark[]>();
-            const presented = comments.map((comment) => {
-              const doc = comment.document;
-              let marks: CommentMark[] | undefined;
-              if (doc) {
-                if (!marksCache.has(doc.id)) {
-                  marksCache.set(
-                    doc.id,
-                    ProsemirrorHelper.getComments(
-                      DocumentHelper.toProsemirror(doc)
-                    )
-                  );
-                }
-                marks = marksCache.get(doc.id);
-              }
-              return presentCommentWithText(comment, marks);
+            const { comments } = await Comment.findAllForUser(user, {
+              document,
+              collectionId,
+              parentCommentId,
+              statusFilter,
+              includeDocuments: true,
+              offset: offset ?? 0,
+              limit: limit ?? 25,
             });
-            return success(presented);
+
+            return success(
+              comments.map((comment) => presentCommentWithText(comment))
+            );
           } catch (err) {
             return error(err);
           }
@@ -296,14 +216,8 @@ export function commentTools(server: McpServer, scopes: string[]) {
               authorize(user, "comment", document);
 
               if (anchorText) {
-                if (!document.state) {
-                  throw ValidationError(
-                    "Cannot inline comment on this document"
-                  );
-                }
-
-                const updatedState = ProsemirrorHelper.applyCommentMarkByText({
-                  docState: document.state,
+                const updated = ProsemirrorHelper.applyCommentMarkByText({
+                  docState: DocumentHelper.toState(document),
                   anchorText,
                   commentId,
                   userId: user.id,
@@ -311,34 +225,32 @@ export function commentTools(server: McpServer, scopes: string[]) {
                   suffix: anchorSuffix,
                 });
 
-                if (!updatedState) {
+                if (!updated) {
                   throw ValidationError(
                     "Could not anchor comment to the provided text in the document"
                   );
                 }
 
-                await document.updateWithCtx(ctx, { state: updatedState });
+                await document.updateWithCtx(ctx, {
+                  state: updated.state,
+                  content: updated.content,
+                });
               }
 
-              const created = await Comment.createWithCtx(ctx, {
+              return Comment.createWithCtx(ctx, {
                 id: commentId,
                 data,
                 createdById: user.id,
                 documentId,
                 parentCommentId,
               });
-
-              created.createdBy = user;
-              created.document = document!;
-              return created;
             });
 
-            const presented = presentCommentWithText(comment);
-            return {
-              content: [
-                { type: "text" as const, text: JSON.stringify(presented) },
-              ],
-            } satisfies CallToolResult;
+            return success({
+              success: true,
+              id: comment.id,
+              documentId: comment.documentId,
+            });
           } catch (err) {
             return error(err);
           }
@@ -355,7 +267,7 @@ export function commentTools(server: McpServer, scopes: string[]) {
         description:
           "Updates an existing comment by its ID. Can update the text content, resolve or unresolve the comment thread, or both. Only top-level comments (not replies) can be resolved or unresolved.",
         annotations: {
-          idempotentHint: true,
+          idempotentHint: false,
           readOnlyHint: false,
         },
         inputSchema: {
@@ -407,15 +319,23 @@ export function commentTools(server: McpServer, scopes: string[]) {
             comment.unresolve();
           }
 
+          // A write that changes nothing must fail loud rather than return a
+          // success the caller would read as a completed write — the request
+          // either carried no recognized fields or text identical to the
+          // current comment.
+          if (!comment.changed()) {
+            return error(
+              "The update resulted in no changes to the comment. Ensure at least one field is provided and differs from the current comment."
+            );
+          }
+
           await comment.saveWithCtx(ctx, status ? { silent: true } : undefined);
 
-          comment.document = document!;
-          const presented = presentCommentWithText(comment);
-          return {
-            content: [
-              { type: "text" as const, text: JSON.stringify(presented) },
-            ],
-          } satisfies CallToolResult;
+          return success({
+            success: true,
+            id: comment.id,
+            documentId: comment.documentId,
+          });
         } catch (err) {
           return error(err);
         }

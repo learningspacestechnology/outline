@@ -463,6 +463,11 @@ export class MarkdownSerializerState {
   }
 
   renderTable(node) {
+    // A table with no rows is not valid Markdown and has nothing to serialize.
+    if (node.childCount === 0) {
+      return;
+    }
+
     this.flushClose(1);
 
     const prevTable = this.inTable;
@@ -477,10 +482,12 @@ export class MarkdownSerializerState {
     });
 
     // Ensure there is an empty newline above all tables
+    this.write();
     this.append("\n");
 
     // Render rows
     node.forEach((row, _, i) => {
+      this.write();
       row.forEach((cell, _, j) => {
         this.append(j === 0 ? "| " : " | ");
 
@@ -496,7 +503,11 @@ export class MarkdownSerializerState {
         cellState.inList = this.inList;
         cellState.inTightList = this.inTightList;
 
-        cell.forEach((cellNode) => {
+        cell.forEach((cellNode, _, index) => {
+          if (index > 0) {
+            cellState.append("\n");
+          }
+
           if (
             !(
               cellNode.textContent === "" &&
@@ -523,6 +534,7 @@ export class MarkdownSerializerState {
 
       // Header separator after first row
       if (i === 0) {
+        this.write();
         headerRow.forEach((cell, _, j) => {
           const width = columnWidths[j];
           if (cell.attrs.alignment === "center") {

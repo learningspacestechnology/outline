@@ -16,6 +16,18 @@ RUN corepack enable
 COPY package.json yarn.lock .yarnrc.yml ./
 RUN yarn install
 
+# Limit glibc malloc arenas, which default to 8 per CPU. Each arena can hold
+# onto 64MB of virtual memory and freed allocations, which inflates resident
+# memory in multi-threaded Node.js processes for no performance benefit here.
+ENV MALLOC_ARENA_MAX=2
+
+# Create a non-root user compatible with Debian and BusyBox based images
+RUN addgroup --gid 1001 nodejs && \
+    adduser --uid 1001 --ingroup nodejs nodejs && \
+    mkdir -p /var/lib/outline && \
+    chown -R nodejs:nodejs /var/lib/outline && \
+    chown -R nodejs:nodejs $APP_PATH
+
 # Copy the rest of the application
 COPY . .
 

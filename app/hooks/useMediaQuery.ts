@@ -1,4 +1,10 @@
-import { useState, useEffect } from "react";
+import { useCallback, useSyncExternalStore } from "react";
+import { isBrowser } from "@shared/utils/browser";
+
+const canMatch = (): boolean =>
+  isBrowser && typeof window.matchMedia === "function";
+
+const getServerSnapshot = (): boolean => false;
 
 /**
  * Hook to check if a media query matches the current viewport.
@@ -7,23 +13,22 @@ import { useState, useEffect } from "react";
  * @returns boolean indicating whether the media query matches
  */
 export default function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState<boolean>(false);
-
-  useEffect(() => {
-    if (window.matchMedia) {
-      const media = window.matchMedia(query);
-      if (media.matches !== matches) {
-        setMatches(media.matches);
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      if (!canMatch()) {
+        return () => {};
       }
-      const listener = () => {
-        setMatches(media.matches);
-      };
-      media.addListener(listener);
-      return () => media.removeListener(listener);
-    }
+      const media = window.matchMedia(query);
+      media.addEventListener("change", onStoreChange);
+      return () => media.removeEventListener("change", onStoreChange);
+    },
+    [query]
+  );
 
-    return undefined;
-  }, [matches, query]);
+  const getSnapshot = useCallback(
+    () => (canMatch() ? window.matchMedia(query).matches : false),
+    [query]
+  );
 
-  return matches;
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }

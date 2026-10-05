@@ -18,6 +18,7 @@ import Time from "~/components/Time";
 import env from "~/env";
 import useQuery from "~/hooks/useQuery";
 import useStores from "~/hooks/useStores";
+import { isTruthyQueryValue } from "~/utils/urls";
 import GitLabIcon from "./components/Icon";
 import { GitLabConnectButton } from "./components/GitLabButton";
 
@@ -30,7 +31,7 @@ function GitLab() {
   const appName = env.APP_NAME;
 
   React.useEffect(() => {
-    void integrations.fetchAll({
+    void integrations.fetchAllIfNeeded({
       service: IntegrationService.GitLab,
       withRelations: true,
     });
@@ -59,7 +60,7 @@ function GitLab() {
           )}
         </Notice>
       )}
-      {installRequest === "true" && (
+      {isTruthyQueryValue(installRequest) && (
         <Notice>
           <Trans>
             The owner of GitLab account has been requested to install the

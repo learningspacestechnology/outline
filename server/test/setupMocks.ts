@@ -14,21 +14,24 @@ import { __setRequireDirectoryCache } from "@server/utils/fs";
 // they live in.
 __setRequireDirectoryCache(
   "emails/templates",
-  import.meta.glob("../emails/templates/!(index|*.test).{js,ts}", {
-    eager: true,
-  })
+  import.meta.glob(
+    ["../emails/templates/*.{js,ts,tsx}", "!**/index.*", "!**/*.test.*"],
+    { eager: true }
+  )
 );
 __setRequireDirectoryCache(
   "queues/processors",
-  import.meta.glob("../queues/processors/!(index|*.test).{js,ts}", {
-    eager: true,
-  })
+  import.meta.glob(
+    ["../queues/processors/*.{js,ts,tsx}", "!**/index.*", "!**/*.test.*"],
+    { eager: true }
+  )
 );
 __setRequireDirectoryCache(
   "queues/tasks",
-  import.meta.glob("../queues/tasks/!(index|*.test).{js,ts}", {
-    eager: true,
-  })
+  import.meta.glob(
+    ["../queues/tasks/*.{js,ts,tsx}", "!**/index.*", "!**/*.test.*"],
+    { eager: true }
+  )
 );
 
 vi.mock("ioredis", async () => {
@@ -48,7 +51,6 @@ vi.mock("dd-trace", async () => {
   return { default: mod.mockTracer, ...mod };
 });
 vi.mock("franc", () => import("../__mocks__/franc"));
-vi.mock("iso-639-3", () => import("../__mocks__/iso-639-3"));
 vi.mock(
   "request-filtering-agent",
   () => import("../__mocks__/request-filtering-agent")

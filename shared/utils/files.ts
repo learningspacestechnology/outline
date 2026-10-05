@@ -113,26 +113,6 @@ export function getDataTransferFiles(
 }
 
 /**
- * Get an array of DataTransferItems from a drag event
- *
- * @param event The react or native drag event
- * @returns An array of DataTransferItems
- */
-export function getDataTransferItems(
-  event: React.DragEvent<HTMLElement> | DragEvent
-): DataTransferItem[] {
-  const dt = event.dataTransfer;
-
-  if (dt) {
-    if ("items" in dt && dt.items.length) {
-      return dt.items ? Array.prototype.slice.call(dt.items) : [];
-    }
-  }
-
-  return [];
-}
-
-/**
  * Get an array of Files from an input event
  *
  * @param event The react or native input event
@@ -157,7 +137,14 @@ export function getFileNameFromUrl(url: string) {
     const urlObj = new URL(url);
     const pathname = urlObj.pathname;
     const filename = pathname.substring(pathname.lastIndexOf("/") + 1);
-    return filename;
+
+    try {
+      // Decode percent-encoding so the name is human readable (e.g. "My%20File.pdf" → "My File.pdf").
+      return decodeURIComponent(filename);
+    } catch (_err) {
+      // Malformed percent-encoding, fall back to the raw filename.
+      return filename;
+    }
   } catch (_err) {
     return null;
   }

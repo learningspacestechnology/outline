@@ -37,7 +37,8 @@ export default function codeMenuItems(ctx: SelectionContext): MenuItem[] {
 
   const remainingLangMenuItems = Object.entries(codeLanguages)
     .filter(
-      ([value]) =>
+      ([value, item]) =>
+        !item.alias &&
         !frequentLanguages.includes(value as keyof typeof codeLanguages)
     )
     .map(([value, item]) => langToMenuItem({ node, value, label: item.label }));
@@ -107,7 +108,7 @@ const langToMenuItem = ({
 }): MenuItem => ({
   name: "code_block",
   label,
-  active: () => node.attrs.language === value,
+  active: () => (node.attrs.language ?? "none") === value,
   attrs: {
     language: value,
   },

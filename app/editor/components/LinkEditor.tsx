@@ -80,6 +80,15 @@ const LinkEditor: React.FC<Props> = ({
     }
   }, [trimmedQuery, request]);
 
+  // Focus imperatively rather than with the autoFocus attribute, which only
+  // applies on mount – the editor can already be open when focus is requested.
+  useEffect(() => {
+    if (autoFocus) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [autoFocus]);
+
   useOnClickOutside(wrapperRef, (ev) => {
     // If the link is totally empty or only spaces then remove the mark
     if (!trimmedQuery) {
@@ -171,8 +180,11 @@ const LinkEditor: React.FC<Props> = ({
     }
   };
 
-  const handleSearch = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleSearch = (event: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = event.target.value;
+    if (newValue === query) {
+      return;
+    }
     setQuery(newValue);
     setSelectedIndex(-1);
   };
@@ -214,7 +226,6 @@ const LinkEditor: React.FC<Props> = ({
           onKeyDown={handleKeyDown}
           onChange={handleSearch}
           onFocus={handleSearch}
-          autoFocus={autoFocus}
           readOnly={!view.editable}
         />
         {actions.map((action, index) => {
@@ -251,12 +262,7 @@ const LinkEditor: React.FC<Props> = ({
                   selected={index === selectedIndex}
                   key={doc.id}
                   subtitle={
-                    <DocumentBreadcrumb
-                      document={doc}
-                      onlyText
-                      reverse
-                      maxDepth={2}
-                    />
+                    <DocumentBreadcrumb document={doc} onlyText maxDepth={2} />
                   }
                   title={doc.title}
                   icon={

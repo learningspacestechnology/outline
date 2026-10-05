@@ -1,4 +1,5 @@
 import { Scope, TeamPreference } from "@shared/types";
+import { iconNames } from "@shared/utils/IconNames";
 import { UserFlag } from "@server/models/User";
 import {
   buildUser,
@@ -27,6 +28,20 @@ describe("POST /mcp/", () => {
         body,
       });
       expect(res.status).toEqual(401);
+    });
+
+    it("should include WWW-Authenticate header on 401 responses", async () => {
+      const { body } = mcpRequest("tools/list");
+      const res = await server.post("/mcp/", {
+        headers: { Accept: "application/json, text/event-stream" },
+        body,
+      });
+      expect(res.status).toEqual(401);
+      const wwwAuth = res.headers.get("www-authenticate");
+      expect(wwwAuth).toBeTruthy();
+      expect(wwwAuth).toContain("Bearer");
+      expect(wwwAuth).toContain("resource_metadata=");
+      expect(wwwAuth).toContain("/.well-known/oauth-protected-resource/mcp");
     });
 
     it("should reject JWT authentication", async () => {
@@ -64,6 +79,26 @@ describe("POST /mcp/", () => {
     it("should return 405 for DELETE requests", async () => {
       const res = await server.delete("/mcp/");
       expect(res.status).toEqual(405);
+    });
+
+    it.each(["/mcp/sse", "/mcp/message", "/mcp/manifest.json"])(
+      "should return 404 for %s without rendering the app shell",
+      async (path) => {
+        const res = await server.get(path);
+        const body = await res.text();
+        expect(res.status).toEqual(404);
+        expect(body).not.toContain("<title>");
+      }
+    );
+
+    it("should return 404 for POST to a path below the endpoint", async () => {
+      const { accessToken } = await buildOAuthUser();
+      const { body } = mcpRequest("tools/list");
+      const res = await server.post("/mcp/sse", {
+        headers: mcpHeaders(accessToken),
+        body,
+      });
+      expect(res.status).toEqual(404);
     });
 
     it("should handle initialize and return capabilities", async () => {
@@ -125,6 +160,70 @@ describe("POST /mcp/", () => {
 
       await user.reload();
       expect(user.getFlag(UserFlag.MCP)).toEqual(1);
+    });
+  });
+
+  describe("resources", () => {
+    it("initialize advertises the resources capability", async () => {
+      const { accessToken } = await buildOAuthUser();
+      const { body } = mcpRequest("initialize", {
+        protocolVersion: "2025-03-26",
+        capabilities: {},
+        clientInfo: { name: "test-client", version: "1.0.0" },
+      });
+
+      const res = await server.post("/mcp/", {
+        headers: mcpHeaders(accessToken),
+        body,
+      });
+      expect(res.status).toEqual(200);
+
+      const parsed = await parseMcpResponse(res);
+      const result = parsed?.result as {
+        capabilities?: { resources?: unknown };
+      };
+      expect(result?.capabilities?.resources).toBeDefined();
+    });
+
+    it("resources/list includes the icons resource", async () => {
+      const { accessToken } = await buildOAuthUser();
+      const { body } = mcpRequest("resources/list");
+
+      const res = await server.post("/mcp/", {
+        headers: mcpHeaders(accessToken),
+        body,
+      });
+      expect(res.status).toEqual(200);
+
+      const parsed = await parseMcpResponse(res);
+      const result = parsed?.result as {
+        resources?: { uri: string; mimeType?: string }[];
+      };
+      const icons = result?.resources?.find((r) => r.uri === "outline://icons");
+      expect(icons).toBeDefined();
+      expect(icons?.mimeType).toEqual("application/json");
+    });
+
+    it("resources/read returns the icon names as JSON", async () => {
+      const { accessToken } = await buildOAuthUser();
+      const { body } = mcpRequest("resources/read", {
+        uri: "outline://icons",
+      });
+
+      const res = await server.post("/mcp/", {
+        headers: mcpHeaders(accessToken),
+        body,
+      });
+      expect(res.status).toEqual(200);
+
+      const parsed = await parseMcpResponse(res);
+      const result = parsed?.result as {
+        contents?: { uri: string; mimeType?: string; text: string }[];
+      };
+      const content = result?.contents?.[0];
+      expect(content?.uri).toEqual("outline://icons");
+      expect(content?.mimeType).toEqual("application/json");
+      expect(JSON.parse(content?.text ?? "null")).toEqual(iconNames);
     });
   });
 
@@ -215,7 +314,7 @@ describe("POST /mcp/", () => {
       });
       expect(res?.result?.isError).toBeUndefined();
       const data = JSON.parse(res?.result?.content?.[0]?.text ?? "{}");
-      expect(data.document.title).toEqual("Created Document");
+      expect(data.title).toEqual("Created Document");
     });
 
     it("create-scoped token does not have update_document tool", async () => {
@@ -272,7 +371,7 @@ describe("POST /mcp/", () => {
         accessToken,
         "update_document",
         {
-          id: created.document.id,
+          id: created.id,
           title: "Updated by Write Token",
         }
       );

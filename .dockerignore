@@ -23,6 +23,8 @@ node_modules
 **/*.test.jsx
 **/__tests__
 **/__mocks__
+**/__snapshots__
+**/test/fixtures
 
 # Secrets and host-only deployment files — must never be baked into the image.
 **/*.key
