@@ -24,7 +24,7 @@ ENV MALLOC_ARENA_MAX=2
 # Create a non-root user compatible with Debian and BusyBox based images
 ENV APP_PATH=/opt/outline
 RUN addgroup --gid 1001 nodejs && \
-    adduser --uid 1001 --ingroup nodejs nodejs && \
+    adduser --uid 1001 --ingroup nodejs --disabled-password --gecos "" nodejs && \
     mkdir -p /var/lib/outline && \
     chown -R nodejs:nodejs /var/lib/outline && \
     chown -R nodejs:nodejs $APP_PATH
