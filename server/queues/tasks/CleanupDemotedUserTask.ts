@@ -13,10 +13,16 @@ type Props = {
  * currently this is done by destroying associated Api Keys and disabling webhooks.
  */
 export default class CleanupDemotedUserTask extends BaseTask<Props> {
+  protected jobId({ userId }: Props) {
+    return `cleanup-demoted-user:${userId}`;
+  }
+
   public async perform(props: Props) {
-    const user = await User.scope("withTeam").findByPk(props.userId, {
-      rejectOnEmpty: true,
-    });
+    const user = await User.scope("withTeam").findByPk(props.userId);
+
+    if (!user) {
+      return;
+    }
 
     await sequelize.transaction(async (transaction) => {
       if (cannot(user, "createWebhookSubscription", user.team)) {

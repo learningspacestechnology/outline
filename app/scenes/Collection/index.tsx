@@ -48,10 +48,11 @@ import MembershipPreview from "./components/MembershipPreview";
 import Navigation, { CollectionTab } from "./components/Navigation";
 import Notices from "./components/Notices";
 import Overview from "./components/Overview";
+import { CollectionMeta } from "./components/CollectionMeta";
 import { Header } from "./components/Header";
 import usePersistedState from "~/hooks/usePersistedState";
 import useCurrentUser from "~/hooks/useCurrentUser";
-import { ProsemirrorHelper } from "@shared/utils/ProsemirrorHelper";
+import { ProsemirrorDataHelper } from "@shared/utils/ProsemirrorDataHelper";
 
 const CollectionScene = observer(function CollectionScene_() {
   const params = useParams<{ collectionSlug?: string }>();
@@ -73,7 +74,7 @@ const CollectionScene = observer(function CollectionScene_() {
   const collection = collections.get(id);
   const can = usePolicy(collection);
   const hasDescription = collection?.data
-    ? !ProsemirrorHelper.isEmptyData(collection.data)
+    ? !ProsemirrorDataHelper.isEmpty(collection.data)
     : false;
 
   const { pins, count } = usePinnedDocuments(urlId, collection?.id);
@@ -115,6 +116,9 @@ const CollectionScene = observer(function CollectionScene_() {
     }
 
     void fetchData();
+    // Fetched once on mount, the slug in `id` also changes when the collection
+    // is renamed which must not trigger a refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -182,11 +186,12 @@ const CollectionScene = observer(function CollectionScene_() {
             collection={collection}
             isEditing={isEditRoute || !user?.separateEditMode}
           />
+          <CollectionMeta collection={collection} />
 
           <PinnedDocuments
             pins={pins}
-            canUpdate={can.update}
             placeholderCount={count}
+            collapseKey={collection.id}
           />
 
           <Content>

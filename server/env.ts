@@ -342,6 +342,7 @@ export class Environment {
 
   /**
    * A comma list of which services should be enabled on this instance – defaults to all.
+   * The "admin" service is only available in development.
    *
    * If a services flag is passed it takes priority over the environment variable
    * for example: --services=web,worker
@@ -706,6 +707,16 @@ export class Environment {
    */
   @IsOptional()
   public AWS_S3_ACL = environment.AWS_S3_ACL ?? "private";
+
+  /**
+   * Which HTTP method to use for presigned uploads to S3-compatible storage.
+   * "post" uses multipart form upload (traditional S3 presigned POST).
+   * "put" uses a single PUT request with a presigned URL (required for
+   * providers like Cloudflare R2 that do not support presigned POST).
+   */
+  @IsIn(["put", "post"])
+  public AWS_S3_UPLOAD_METHOD =
+    this.toOptionalString(environment.AWS_S3_UPLOAD_METHOD) ?? "post";
 
   /**
    * Which file storage system to use

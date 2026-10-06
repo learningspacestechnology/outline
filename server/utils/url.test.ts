@@ -5,20 +5,21 @@ import { isInvalidAppPath, validateUrlNotPrivate } from "./url";
 
 describe("validateUrlNotPrivate", () => {
   let lookupSpy: MockInstance;
+  const originalAllowedPrivateIps = env.ALLOWED_PRIVATE_IP_ADDRESSES;
 
   beforeEach(() => {
-    lookupSpy = vi
-      .spyOn(dns.promises, "lookup")
-      .mockResolvedValue({ address: "93.184.216.34", family: 4 });
+    env.ALLOWED_PRIVATE_IP_ADDRESSES = undefined;
+    lookupSpy = vi.spyOn(dns.promises, "lookup");
+    lookupSpy.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
   });
 
   afterEach(() => {
     lookupSpy.mockRestore();
-    env.ALLOWED_PRIVATE_IP_ADDRESSES = undefined;
+    env.ALLOWED_PRIVATE_IP_ADDRESSES = originalAllowedPrivateIps;
   });
 
   it("should allow public IP addresses", async () => {
-    lookupSpy.mockResolvedValue({ address: "93.184.216.34", family: 4 });
+    lookupSpy.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     await expect(
       validateUrlNotPrivate("https://example.com")
     ).resolves.toBeUndefined();
@@ -31,10 +32,39 @@ describe("validateUrlNotPrivate", () => {
   });
 
   it("should reject URL resolving to private IP", async () => {
-    lookupSpy.mockResolvedValue({ address: "192.168.1.1", family: 4 });
+    lookupSpy.mockResolvedValue([{ address: "192.168.1.1", family: 4 }]);
     await expect(
       validateUrlNotPrivate("https://internal.example.com")
     ).rejects.toThrow("is not allowed");
+  });
+
+  it("should reject when any of multiple records is private", async () => {
+    lookupSpy.mockResolvedValue([
+      { address: "93.184.216.34", family: 4 },
+      { address: "169.254.169.254", family: 4 },
+    ]);
+    await expect(
+      validateUrlNotPrivate("https://internal.example.com")
+    ).rejects.toThrow("is not allowed");
+  });
+
+  it("should allow when all records are public", async () => {
+    lookupSpy.mockResolvedValue([
+      { address: "93.184.216.34", family: 4 },
+      { address: "2606:2800:220:1:248:1893:25c8:1946", family: 6 },
+    ]);
+    await expect(
+      validateUrlNotPrivate("https://example.com")
+    ).resolves.toBeUndefined();
+  });
+
+  it("should reject when the hostname cannot be resolved", async () => {
+    lookupSpy.mockRejectedValue(
+      Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" })
+    );
+    await expect(
+      validateUrlNotPrivate("https://does-not-exist.example.com")
+    ).rejects.toThrow("DNS lookup for does-not-exist.example.com failed.");
   });
 
   it("should reject loopback address", async () => {
@@ -44,7 +74,7 @@ describe("validateUrlNotPrivate", () => {
   });
 
   it("should reject link-local address", async () => {
-    lookupSpy.mockResolvedValue({ address: "169.254.169.254", family: 4 });
+    lookupSpy.mockResolvedValue([{ address: "169.254.169.254", family: 4 }]);
     await expect(
       validateUrlNotPrivate("https://metadata.internal")
     ).rejects.toThrow("is not allowed");
@@ -64,10 +94,9 @@ describe("validateUrlNotPrivate", () => {
   });
 
   it("should reject IPv4-mapped IPv6 address resolved via DNS", async () => {
-    lookupSpy.mockResolvedValue({
-      address: "::ffff:169.254.169.254",
-      family: 6,
-    });
+    lookupSpy.mockResolvedValue([
+      { address: "::ffff:169.254.169.254", family: 6 },
+    ]);
     await expect(
       validateUrlNotPrivate("https://metadata.example.com")
     ).rejects.toThrow("is not allowed");
@@ -95,7 +124,7 @@ describe("validateUrlNotPrivate", () => {
 
     it("should allow IP within CIDR range", async () => {
       env.ALLOWED_PRIVATE_IP_ADDRESSES = ["192.168.1.0/24"];
-      lookupSpy.mockResolvedValue({ address: "192.168.1.50", family: 4 });
+      lookupSpy.mockResolvedValue([{ address: "192.168.1.50", family: 4 }]);
       await expect(
         validateUrlNotPrivate("https://gitlab.internal")
       ).resolves.toBeUndefined();
@@ -103,7 +132,7 @@ describe("validateUrlNotPrivate", () => {
 
     it("should reject IP outside CIDR range", async () => {
       env.ALLOWED_PRIVATE_IP_ADDRESSES = ["192.168.1.0/24"];
-      lookupSpy.mockResolvedValue({ address: "192.168.2.1", family: 4 });
+      lookupSpy.mockResolvedValue([{ address: "192.168.2.1", family: 4 }]);
       await expect(
         validateUrlNotPrivate("https://gitlab.internal")
       ).rejects.toThrow("is not allowed");
@@ -111,7 +140,7 @@ describe("validateUrlNotPrivate", () => {
 
     it("should allow resolved hostname matching allowlist", async () => {
       env.ALLOWED_PRIVATE_IP_ADDRESSES = ["10.0.0.5"];
-      lookupSpy.mockResolvedValue({ address: "10.0.0.5", family: 4 });
+      lookupSpy.mockResolvedValue([{ address: "10.0.0.5", family: 4 }]);
       await expect(
         validateUrlNotPrivate("https://gitlab.internal")
       ).resolves.toBeUndefined();
@@ -126,7 +155,7 @@ describe("validateUrlNotPrivate", () => {
 
     it("should support multiple entries in allowlist", async () => {
       env.ALLOWED_PRIVATE_IP_ADDRESSES = ["10.0.0.1", "172.16.0.0/12"];
-      lookupSpy.mockResolvedValue({ address: "172.20.5.10", family: 4 });
+      lookupSpy.mockResolvedValue([{ address: "172.20.5.10", family: 4 }]);
       await expect(
         validateUrlNotPrivate("https://gitlab.internal")
       ).resolves.toBeUndefined();

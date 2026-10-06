@@ -13,6 +13,7 @@ import Fade from "~/components/Fade";
 import Flex from "~/components/Flex";
 import Scrollable from "~/components/Scrollable";
 import { ArrowDownIcon } from "~/components/Icons/ArrowIcon";
+import { useSplitView } from "~/components/SplitView/context";
 import useCurrentUser from "~/hooks/useCurrentUser";
 import { useFocusedComment } from "~/hooks/useFocusedComment";
 import useKeyDown from "~/hooks/useKeyDown";
@@ -30,6 +31,7 @@ import useMobile from "~/hooks/useMobile";
 
 function Comments() {
   const { ui, comments, documents } = useStores();
+  const { pane } = useSplitView();
   const user = useCurrentUser();
   const { editor, isEditorInitialized, setFocusedCommentId } =
     useDocumentContext();
@@ -49,7 +51,7 @@ function Comments() {
   const isAtBottom = useRef(true);
   const [showJumpToRecentBtn, setShowJumpToRecentBtn] = useState(false);
 
-  useKeyDown("Escape", () => document && ui.set({ rightSidebar: null }));
+  useKeyDown("Escape", () => document && ui.setRightSidebar(null, pane));
 
   // Account for the resolved status of the comment changing
   useEffect(() => {
@@ -102,10 +104,17 @@ function Comments() {
     }
   };
 
+  // Scroll to the bottom on first display and when the sort or resolved filter
+  // changes. The key skips the re-run that happens when a hidden panel becomes
+  // visible again, so that the scroll position is kept.
+  const scrollKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    // Handles: 1. on refresh 2. when switching sort setting
     const readyToDisplay = Boolean(document && isEditorInitialized);
+    const key = `${document?.id}:${readyToDisplay}:${sortOption.type}:${viewingResolved}`;
+    const changed = scrollKeyRef.current !== key;
+    scrollKeyRef.current = key;
     if (
+      changed &&
       readyToDisplay &&
       sortOption.type === CommentSortType.MostRecent &&
       !viewingResolved
@@ -204,7 +213,7 @@ function Comments() {
         </Flex>
       }
       onClose={() => {
-        ui.set({ rightSidebar: null });
+        ui.setRightSidebar(null, pane);
         setFocusedCommentId(null);
       }}
       scrollable={false}

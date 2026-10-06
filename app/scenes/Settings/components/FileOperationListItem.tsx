@@ -25,6 +25,12 @@ type Props = {
   fileOperation: FileOperation;
 };
 
+const TerminalStates = [
+  FileOperationState.Complete,
+  FileOperationState.Error,
+  FileOperationState.Expired,
+];
+
 const FileOperationListItem = ({ fileOperation }: Props) => {
   const { t } = useTranslation();
   const user = useCurrentUser();
@@ -51,7 +57,9 @@ const FileOperationListItem = ({ fileOperation }: Props) => {
     [FileOperationFormat.JSON]: "JSON",
     [FileOperationFormat.Notion]: "Notion",
     [FileOperationFormat.MarkdownZip]: "Markdown",
+    [FileOperationFormat.OKFZip]: "OKF",
     [FileOperationFormat.HTMLZip]: "HTML",
+    [FileOperationFormat.TextBundleZip]: "TextBundle",
     [FileOperationFormat.PDF]: "PDF",
   };
 
@@ -96,7 +104,7 @@ const FileOperationListItem = ({ fileOperation }: Props) => {
 
   const showMenu =
     (fileOperation.type === FileOperationType.Export &&
-      fileOperation.state === FileOperationState.Complete) ||
+      TerminalStates.includes(fileOperation.state)) ||
     fileOperation.type === FileOperationType.Import;
 
   const selfHostedHelp = isCloudHosted

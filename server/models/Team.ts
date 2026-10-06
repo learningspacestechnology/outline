@@ -24,11 +24,17 @@ import {
   BeforeCreate,
   IsNumeric,
 } from "sequelize-typescript";
+import slugify from "slugify";
 import { isEmail } from "validator";
 import { TeamPreferenceDefaults } from "@shared/constants";
-import type { TeamPreferences } from "@shared/types";
+import type { Plan, PlanFeature, TeamPreferences } from "@shared/types";
 import { TeamPreference, UserRole } from "@shared/types";
-import { getBaseDomain, RESERVED_SUBDOMAINS } from "@shared/utils/domains";
+import {
+  getBaseDomain,
+  parseDomain,
+  RESERVED_SUBDOMAINS,
+} from "@shared/utils/domains";
+import { PlanHelper } from "@shared/utils/PlanHelper";
 import { attachmentRedirectRegex } from "@shared/utils/ProsemirrorHelper";
 import { parseEmail } from "@shared/utils/email";
 import { TeamValidation } from "@shared/validations";
@@ -44,7 +50,6 @@ import Share from "./Share";
 import TeamDomain from "./TeamDomain";
 import User from "./User";
 import ParanoidModel from "./base/ParanoidModel";
-import Fix from "./decorators/Fix";
 import IsFQDN from "./validators/IsFQDN";
 import IsUrlOrRelativePath from "./validators/IsUrlOrRelativePath";
 import Length from "./validators/Length";
@@ -74,7 +79,6 @@ const avatarRedirectPattern = new RegExp(attachmentRedirectRegex.source, "i");
   },
 }))
 @Table({ tableName: "teams", modelName: "team" })
-@Fix
 class Team extends ParanoidModel<
   InferAttributes<Team>,
   Partial<InferCreationAttributes<Team>>
@@ -85,7 +89,7 @@ class Team extends ParanoidModel<
     max: TeamValidation.maxNameLength,
     msg: `Team name must be between 1 and ${TeamValidation.maxNameLength} characters`,
   })
-  @Column
+  @Column(DataType.STRING)
   name: string;
 
   @AllowNull
@@ -117,7 +121,7 @@ class Team extends ParanoidModel<
     args: [RESERVED_SUBDOMAINS],
     msg: "You chose a restricted word, please try another.",
   })
-  @Column
+  @Column(DataType.STRING)
   subdomain: string | null;
 
   @Unique
@@ -126,7 +130,7 @@ class Team extends ParanoidModel<
     msg: `domain must be ${TeamValidation.maxDomainLength} characters or less`,
   })
   @IsFQDN
-  @Column
+  @Column(DataType.STRING)
   domain: string | null;
 
   @IsUUID(4)
@@ -183,34 +187,34 @@ class Team extends ParanoidModel<
   }
 
   @Default(true)
-  @Column
+  @Column(DataType.BOOLEAN)
   sharing: boolean;
 
   @Default(false)
-  @Column
+  @Column(DataType.BOOLEAN)
   inviteRequired: boolean;
 
   @Column(DataType.JSONB)
   signupQueryParams: { [key: string]: string } | null;
 
   @Default(true)
-  @Column
+  @Column(DataType.BOOLEAN)
   guestSignin: boolean;
 
   @Default(true)
-  @Column
+  @Column(DataType.BOOLEAN)
   passkeysEnabled: boolean;
 
   @Default(true)
-  @Column
+  @Column(DataType.BOOLEAN)
   documentEmbeds: boolean;
 
   @Default(true)
-  @Column
+  @Column(DataType.BOOLEAN)
   memberCollectionCreate: boolean;
 
   @Default(true)
-  @Column
+  @Column(DataType.BOOLEAN)
   memberTeamCreate: boolean;
 
   @Default(UserRole.Member)
@@ -237,14 +241,14 @@ class Team extends ParanoidModel<
   preferences: TeamPreferences | null;
 
   @IsDate
-  @Column
+  @Column(DataType.DATE)
   suspendedAt: Date | null;
 
   @Column(DataType.JSONB)
   flags: { [key in TeamFlag]?: number } | null;
 
   @IsDate
-  @Column
+  @Column(DataType.DATE)
   @SkipChangeset
   lastActiveAt: Date | null;
 
@@ -259,6 +263,20 @@ class Team extends ParanoidModel<
    */
   get isSuspended(): boolean {
     return !!this.suspendedAt;
+  }
+
+  /**
+   * Returns the plan that the team is on.
+   */
+  get plan(): Plan {
+    return PlanHelper.defaultPlan;
+  }
+
+  /**
+   * Returns the features that the team is entitled to use.
+   */
+  get entitlements(): PlanFeature[] {
+    return PlanHelper.getFeatures(this.plan);
   }
 
   /**
@@ -285,6 +303,20 @@ class Team extends ParanoidModel<
 
     url.host = `${this.subdomain}.${getBaseDomain()}`;
     return url.href.replace(/\/$/, "");
+  }
+
+  /**
+   * Returns whether the given url points at this team's installation, taking
+   * into account custom domains and hosted subdomains.
+   *
+   * @param url The url to check.
+   * @returns True if the url belongs to this team.
+   */
+  public isTeamUrl(url: string): boolean {
+    if (!url) {
+      return false;
+    }
+    return parseDomain(url).host === parseDomain(this.url).host;
   }
 
   /**
@@ -580,6 +612,48 @@ class Team extends ParanoidModel<
         },
       })) || (await this.findByPreviousSubdomain(subdomain))
     );
+  }
+
+  /**
+   * Find a subdomain that is not yet in use, derived from the requested value.
+   * A trailing top-level domain is removed and the remainder is slugified,
+   * a numeric suffix is appended until a free subdomain is found.
+   *
+   * @param requested - The preferred subdomain or team name.
+   * @param options - Additional find options to pass to the query.
+   * @returns An available subdomain.
+   */
+  static async findAvailableSubdomain(
+    requested: string,
+    options?: FindOptions<Team>
+  ) {
+    // strip a trailing top-level domain so "acme.com" becomes "acme"
+    const withoutTld = requested.replace(/\s*\.[a-z]{2,}\s*$/i, "");
+
+    // filter subdomain to only valid characters
+    // if there are less than the minimum length, use a default subdomain
+    const normalized = slugify(withoutTld, { lower: true, strict: true });
+    const base =
+      normalized.length < 3 || RESERVED_SUBDOMAINS.includes(normalized)
+        ? "team"
+        : normalized;
+
+    let subdomain = base;
+    let append = 0;
+
+    for (;;) {
+      const existing = await this.findOne({
+        ...options,
+        where: { subdomain },
+        paranoid: false,
+      });
+
+      if (!existing) {
+        return subdomain;
+      }
+
+      subdomain = `${base}${++append}`;
+    }
   }
 
   /**

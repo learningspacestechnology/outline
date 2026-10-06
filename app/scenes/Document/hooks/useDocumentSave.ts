@@ -166,8 +166,8 @@ export function useDocumentSave({
 
       try {
         const savedDocument = await document.save(undefined, options);
-        setIsEditorDirty(false);
         isEditorDirtyRef.current = false;
+        setIsEditorDirty(false);
 
         if (options.done) {
           history.push({
